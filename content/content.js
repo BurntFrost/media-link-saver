@@ -20,7 +20,11 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   const STREAM_EXT = new Set(['.m3u8', '.mpd']);
 
-  const MEDIA_DATA_ATTRS = ['data-src', 'data-video-url', 'data-hd-url', 'data-file-url'];
+  const MEDIA_DATA_ATTRS = [
+    'data-src', 'data-video-url', 'data-hd-url', 'data-file-url',
+    'data-sd-url', 'data-mobile-url', 'data-hd-file-url',
+    'data-video-src', 'data-content-url', 'data-mp4', 'data-webm',
+  ];
   const LAZY_ATTRS = ['data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src'];
 
   const TRACKING_RE = /\/pixel[./?]|\/tr[./?]|1x1|spacer/i;
@@ -139,11 +143,18 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   function collectRoots() {
     const roots = [document];
+    // chrome.dom.openOrClosedShadowRoot() can access closed shadow roots
+    // that el.shadowRoot cannot — available to Chrome extensions since Chrome 88
+    const canOpenClosed = typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot;
+    const getShadowRoot = canOpenClosed
+      ? (el) => chrome.dom.openOrClosedShadowRoot(el)
+      : (el) => el.shadowRoot;
     const walk = (root) => {
       for (const el of root.querySelectorAll('*')) {
-        if (el.shadowRoot) {
-          roots.push(el.shadowRoot);
-          walk(el.shadowRoot);
+        const sr = getShadowRoot(el);
+        if (sr) {
+          roots.push(sr);
+          walk(sr);
         }
       }
     };
@@ -201,6 +212,30 @@ if (!globalThis.__mediaLinkSaverInjected) {
     }
 
     return null;
+  }
+
+  // ── Poster → direct video URL heuristic ──
+  // Many CDN-served video sites (RedGifs, Gfycat, etc.) serve poster/thumbnail
+  // images from the same path as the video, just with an image extension.
+  // When a <video> has a blob src (usually MSE/MediaSource, unfetchable),
+  // we derive potential direct .mp4 URLs from the poster.
+
+  const POSTER_IMG_RE = /\.(jpg|jpeg|png|gif|webp|avif)$/i;
+  const POSTER_SUFFIX_RE = /-(mobile|poster|thumb|small|preview|sd)(?=\.mp4$)/i;
+
+  function deriveVideoFromPoster(posterUrl) {
+    try {
+      const url = new URL(posterUrl);
+      if (!POSTER_IMG_RE.test(url.pathname)) return [];
+      const mp4Path = url.pathname.replace(POSTER_IMG_RE, '.mp4');
+      const urls = [new URL(mp4Path, url.origin).href];
+      // Also try without quality/size suffixes (e.g. -mobile → HD version)
+      const stripped = mp4Path.replace(POSTER_SUFFIX_RE, '');
+      if (stripped !== mp4Path) urls.push(new URL(stripped, url.origin).href);
+      return urls;
+    } catch {
+      return [];
+    }
   }
 
   // ── Main extraction ──
@@ -278,8 +313,18 @@ if (!globalThis.__mediaLinkSaverInjected) {
     // Videos
     for (const video of deep('video')) {
       if (video.src) {
-        if (video.src.startsWith('blob:')) addBlob(video, video.src, 'video', 'video');
-        else add(video.src, 'video', 'video');
+        if (video.src.startsWith('blob:')) {
+          addBlob(video, video.src, 'video', 'video');
+          // Blob URLs from MediaSource/MSE can't be fetched — try to derive
+          // a direct .mp4 URL from the poster image path as a fallback
+          if (video.poster) {
+            for (const derived of deriveVideoFromPoster(video.poster)) {
+              add(derived, 'video', 'video-derived');
+            }
+          }
+        } else {
+          add(video.src, 'video', 'video');
+        }
       }
       if (video.poster) add(video.poster, 'image', 'video-poster');
     }
@@ -396,21 +441,53 @@ if (!globalThis.__mediaLinkSaverInjected) {
       } catch { /* tainted canvas — skip */ }
     }
 
+    // Inline script video URL extraction — catches SPAs that embed video
+    // data in JS (Nuxt __NUXT__, Next __NEXT_DATA__, Redux stores, etc.)
+    const INLINE_VIDEO_RE = /https?:[^\s"'<>{}]+?\.(?:mp4|webm|mov|mkv|m4v|m3u8|mpd)/gi;
+    for (const script of document.querySelectorAll('script:not([src])')) {
+      const text = script.textContent;
+      if (!text || text.length > 500_000) continue;
+      INLINE_VIDEO_RE.lastIndex = 0;
+      let match;
+      while ((match = INLINE_VIDEO_RE.exec(text)) !== null) {
+        try {
+          // Clean JSON-escaped slashes (e.g. https:\/\/...)
+          const url = new URL(match[0].replaceAll('\\/', '/')).href;
+          const type = classifyUrl(url);
+          if (type) add(url, type, 'script-data');
+        } catch { /* skip invalid URLs */ }
+      }
+    }
+
+    // Resource Timing API — catches any video/audio actually loaded by the page,
+    // even if the element is in a closed Shadow DOM or injected by a framework
+    try {
+      for (const entry of performance.getEntriesByType('resource')) {
+        const type = classifyUrl(entry.name);
+        if (type === 'video' || type === 'audio') {
+          add(entry.name, type, 'resource-timing');
+        }
+      }
+    } catch { /* Resource Timing unavailable */ }
+
     return media;
   }
 
   // ── Live updates via MutationObserver ──
 
-  let cachedMedia = extractMediaLinks();
+  globalThis.__mediaLinkSaverMedia = extractMediaLinks();
   let scanQueued = false;
+
+  const scheduleIdle = globalThis.requestIdleCallback
+    ? (cb) => requestIdleCallback(cb, { timeout: 500 })
+    : (cb) => setTimeout(cb, 80);
 
   const observer = new MutationObserver(() => {
     if (scanQueued) return;
     scanQueued = true;
-    const schedule = globalThis.requestIdleCallback ?? ((cb) => setTimeout(cb, 80));
-    schedule(() => {
+    scheduleIdle(() => {
       scanQueued = false;
-      cachedMedia = extractMediaLinks();
+      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
     });
   });
 
@@ -433,13 +510,13 @@ if (!globalThis.__mediaLinkSaverInjected) {
     scrollQueued = true;
     setTimeout(() => {
       scrollQueued = false;
-      cachedMedia = extractMediaLinks();
+      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
     }, 300);
   }, { passive: true });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'getMedia') {
-      sendResponse({ media: cachedMedia });
+      sendResponse({ media: globalThis.__mediaLinkSaverMedia });
     }
     return true;
   });

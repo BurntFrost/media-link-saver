@@ -609,16 +609,30 @@ async function setCachedMedia(pageUrl, media) {
 
 // ── Init: inject content script on demand, then fetch media ──
 
-function liveScan(tabId) {
-  return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { action: 'getMedia' }, (response) => {
-      if (chrome.runtime.lastError || !response?.media) {
-        resolve(null);
-      } else {
-        resolve(response.media);
-      }
+async function liveScan(tabId) {
+  try {
+    // Collect media from ALL frames (main + iframes) via executeScript
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => globalThis.__mediaLinkSaverMedia ?? null,
     });
-  });
+    const combined = [];
+    for (const frame of results) {
+      if (frame.result) combined.push(...frame.result);
+    }
+    return combined.length > 0 ? combined : null;
+  } catch {
+    // Fallback: message-based scan (main frame only)
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { action: 'getMedia' }, (response) => {
+        if (chrome.runtime.lastError || !response?.media) {
+          resolve(null);
+        } else {
+          resolve(response.media);
+        }
+      });
+    });
+  }
 }
 
 function mediaEqual(a, b) {
@@ -647,9 +661,9 @@ async function init() {
       renderMedia(allMedia, true);
     }
 
-    // Inject the content script into the active tab (idempotent — won't double-inject)
+    // Inject the content script into ALL frames (idempotent — won't double-inject)
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: tab.id, allFrames: true },
       files: ['content/content.js'],
     });
 
