@@ -7,6 +7,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   const IMAGE_EXT = new Set([
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.avif', '.tiff', '.tif'
+    // Note: .ico intentionally excluded — almost always favicons
   ]);
 
   const VIDEO_EXT = new Set([
@@ -28,9 +29,12 @@ if (!globalThis.__mediaLinkSaverInjected) {
   // URL patterns for non-content assets (favicons, sprites, emoji CDNs,
   // avatars, profile pictures, subreddit styling, common web chrome)
   const ASSET_RE = new RegExp([
-    // Icons & UI chrome
+    // Favicons
     '\\bfavicon\\b',
+    '\\.ico(?:\\?|$)',
     'apple-touch-icon',
+    '\\/favicons?\\/',
+    // Icons, sprites & UI chrome
     '\\/sprites?\\b',
     '\\/emojis?\\/|/twemoji\\/',
     '\\/(?:badges?|logos?|icons?)\\/',
@@ -53,6 +57,30 @@ if (!globalThis.__mediaLinkSaverInjected) {
     'bannerBackground',
     '\\/(?:site|web)[-_]?assets?\\/(?:img|icons?|ui)\\/',
     '\\/static\\/(?:img|images|icons)\\/',
+    // CSS / UI elements — spinners, loaders, separators, nav arrows
+    '\\b(?:spinner|loader|loading|preloader)[-_.]',
+    '\\b(?:separator|divider|spacer|border)[-_.](?:png|jpg|gif|svg)',
+    '\\b(?:arrow|chevron|caret|dropdown)[-_.]',
+    '\\b(?:close|hamburger|menu|search)[-_]icon',
+    '\\b(?:star|rating)[-_.]',
+    '\\b(?:checkbox|radio|toggle)[-_.]',
+    // Placeholder image services
+    'placeholder\\.com',
+    'placehold(?:\\.it|\\.co)',
+    'via\\.placeholder\\.com',
+    'dummyimage\\.com',
+    'picsum\\.photos',
+    'placekitten\\.com',
+    'placeimg\\.com',
+    'fakeimg\\.pl',
+    'lorempixel\\.com',
+    // Placeholder filenames
+    '\\bplaceholder[-_.](?:png|jpg|jpeg|gif|svg|webp)',
+    '\\b(?:no[-_]?image|noimage|image[-_]?not[-_]?found)[-_.]',
+    '\\b(?:default[-_]?(?:image|thumb|photo|img))[-_.]',
+    '\\b(?:missing[-_]?(?:image|photo|img))\\b',
+    '\\bblank[-_.](?:png|jpg|gif|svg)',
+    '\\b(?:fallback|coming[-_]?soon)[-_](?:image|img|thumb)',
   ].join('|'), 'i');
 
   // Minimum intrinsic dimension (px) for <img> — smaller are likely icons/avatars/UI chrome
@@ -216,6 +244,10 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
     // Images (including lazy-loaded) — skip tiny icons/avatars/UI chrome
     for (const img of deep('img')) {
+      // Skip decorative / hidden images
+      if (img.getAttribute('role') === 'presentation') continue;
+      if (img.getAttribute('aria-hidden') === 'true') continue;
+
       const iw = img.naturalWidth;
       const ih = img.naturalHeight;
       if (iw > 0 && ih > 0 && iw < MIN_CONTENT_DIM && ih < MIN_CONTENT_DIM) continue;
@@ -283,8 +315,12 @@ if (!globalThis.__mediaLinkSaverInjected) {
       }
     }
 
-    // CSS backgrounds
+    // CSS backgrounds — skip structural/decorative elements
+    const BG_SKIP_TAGS = new Set(['NAV', 'HEADER', 'FOOTER', 'BUTTON', 'INPUT', 'SELECT']);
     for (const el of deep('[style*="background"]')) {
+      if (BG_SKIP_TAGS.has(el.tagName)) continue;
+      if (el.getAttribute('role') === 'presentation') continue;
+      if (el.getAttribute('aria-hidden') === 'true') continue;
       const match = el.style.backgroundImage?.match(BG_URL_RE);
       if (match?.[1]) {
         try {
