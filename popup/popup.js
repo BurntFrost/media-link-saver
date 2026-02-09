@@ -75,6 +75,8 @@ let allMedia = [];
 let currentFilter = 'all';
 let searchQuery = '';
 let activeTabId = null;
+let activePageUrl = null;
+const savedUrls = new Set();
 
 // ── Helpers ──
 
@@ -220,10 +222,15 @@ function createMediaItem(item, index) {
   } else {
     const btn = document.createElement('button');
     btn.className = 'save-btn';
-    btn.textContent = 'Save';
     btn.dataset.url = item.url;
     btn.dataset.filename = filename;
     if (item.blob) btn.dataset.blob = 'true';
+    if (savedUrls.has(item.url)) {
+      btn.textContent = 'Saved';
+      btn.classList.add('saved');
+    } else {
+      btn.textContent = 'Save';
+    }
     row.appendChild(btn);
   }
 
@@ -317,6 +324,7 @@ mediaListEl.addEventListener('click', async (e) => {
   if (response?.success) {
     btn.textContent = 'Saved';
     btn.classList.add('saved');
+    savedUrls.add(btn.dataset.url);
   } else {
     btn.textContent = 'Error';
     btn.title = response?.error || 'Download failed';
@@ -557,7 +565,8 @@ async function init() {
     if (!tab?.id) throw new Error('No active tab');
     activeTabId = tab.id;
 
-    const pageUrl = canonicalUrl(tab.url);
+    activePageUrl = canonicalUrl(tab.url);
+    const pageUrl = activePageUrl;
     const cached = await getCachedMedia(pageUrl);
     const isFresh = cached && (Date.now() - cached.timestamp < CACHE_TTL_MS);
 
@@ -589,6 +598,20 @@ async function init() {
       emptyStateEl.classList.remove('hidden');
       summary.textContent = 'Could not scan this page';
     }
+
+    // Poll for updates while popup is open (catches scroll / lazy-load / infinite scroll)
+    const POLL_MS = 1500;
+    setInterval(async () => {
+      if (!activeTabId) return;
+      const fresh = await liveScan(activeTabId);
+      if (!fresh) return;
+      const deduped = deduplicateMedia(fresh);
+      if (!mediaEqual(allMedia, deduped)) {
+        allMedia = deduped;
+        if (activePageUrl) setCachedMedia(activePageUrl, fresh);
+        renderMedia(allMedia);
+      }
+    }, POLL_MS);
   } catch {
     loadingEl.classList.add('hidden');
     if (!allMedia.length) emptyStateEl.classList.remove('hidden');

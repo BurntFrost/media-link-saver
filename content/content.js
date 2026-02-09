@@ -362,6 +362,18 @@ if (!globalThis.__mediaLinkSaverInjected) {
     });
   }
 
+  // ── Scroll-triggered re-scan (catches lazy-load via IntersectionObserver) ──
+
+  let scrollQueued = false;
+  window.addEventListener('scroll', () => {
+    if (scrollQueued) return;
+    scrollQueued = true;
+    setTimeout(() => {
+      scrollQueued = false;
+      cachedMedia = extractMediaLinks();
+    }, 300);
+  }, { passive: true });
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'getMedia') {
       sendResponse({ media: cachedMedia });
