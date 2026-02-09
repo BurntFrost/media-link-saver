@@ -352,6 +352,7 @@ saveAllBtn.addEventListener('click', async () => {
     for (const btn of mediaListEl.querySelectorAll('.save-btn:not(.saved)')) {
       btn.textContent = 'Saved';
       btn.classList.add('saved');
+      savedUrls.add(btn.dataset.url);
     }
   } else {
     saveAllBtn.textContent = 'Save All';
@@ -601,7 +602,7 @@ async function init() {
 
     // Poll for updates while popup is open (catches scroll / lazy-load / infinite scroll)
     const POLL_MS = 1500;
-    setInterval(async () => {
+    const pollId = setInterval(async () => {
       if (!activeTabId) return;
       const fresh = await liveScan(activeTabId);
       if (!fresh) return;
