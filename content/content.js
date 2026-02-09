@@ -6,7 +6,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
   globalThis.__mediaLinkSaverInjected = true;
 
   const IMAGE_EXT = new Set([
-    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif', '.tiff', '.tif'
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.avif', '.tiff', '.tif'
   ]);
 
   const VIDEO_EXT = new Set([
@@ -24,6 +24,12 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   const TRACKING_RE = /\/pixel[./?]|\/tr[./?]|1x1|spacer/i;
   const BG_URL_RE = /url\(["']?(.+?)["']?\)/;
+
+  // URL patterns for non-content assets (favicons, sprites, emoji CDNs)
+  const ASSET_RE = /\bfavicon\b|apple-touch-icon|\/sprites?\b|\/emojis?\/|\/twemoji\//i;
+
+  // Minimum intrinsic dimension (px) for <img> — smaller are likely icons/avatars/UI chrome
+  const MIN_CONTENT_DIM = 80;
 
   // ~750 bytes of real content — filters tracking pixels and tiny placeholders
   const DATA_URI_MIN_LENGTH = 1000;
@@ -158,6 +164,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
         if (url.length < DATA_URI_MIN_LENGTH) return;
       }
       if (!blob && !url.startsWith('data:') && TRACKING_RE.test(url)) return;
+      if (!blob && !url.startsWith('data:') && type === 'image' && ASSET_RE.test(url)) return;
       seen.add(url);
       const item = { url, type, source };
       if (blob) item.blob = true;
@@ -180,8 +187,12 @@ if (!globalThis.__mediaLinkSaverInjected) {
       if (type) add(a.href, type, 'link');
     }
 
-    // Images (including lazy-loaded)
+    // Images (including lazy-loaded) — skip tiny icons/avatars/UI chrome
     for (const img of deep('img')) {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      if (iw > 0 && ih > 0 && iw < MIN_CONTENT_DIM && ih < MIN_CONTENT_DIM) continue;
+
       const imgSrc = img.currentSrc || img.src;
       if (imgSrc) {
         if (imgSrc.startsWith('blob:')) addBlob(img, imgSrc, 'image', 'img');
