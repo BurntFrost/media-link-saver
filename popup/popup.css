@@ -198,6 +198,26 @@ header h1 {
   color: #db2777;
 }
 
+.media-type-badge.audio {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.media-type-badge.blob {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.media-type-badge.stream {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.media-type-badge.embed {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
 .save-btn {
   padding: 5px 10px;
   border: none;
@@ -218,6 +238,27 @@ header h1 {
 .save-btn.saved {
   background: #10b981;
   cursor: default;
+}
+
+.copy-btn {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.copy-btn:hover {
+  opacity: 0.8;
+}
+
+.copy-btn.saved {
+  background: #10b981;
 }
 
 /* States */
@@ -288,7 +329,8 @@ header h1 {
   transform: scale(1.01);
 }
 
-.media-item.previewing .save-btn {
+.media-item.previewing .save-btn,
+.media-item.previewing .copy-btn {
   position: relative;
   z-index: 101;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);

@@ -24,6 +24,7 @@ const filters = [
   { key: 'all', label: 'All' },
   { key: 'image', label: 'Images' },
   { key: 'video', label: 'Videos' },
+  { key: 'audio', label: 'Audio' },
 ];
 const filterBtns = filters.map(({ key, label }) => {
   const btn = document.createElement('button');
@@ -73,11 +74,17 @@ app.append(header, controls, mediaListEl, emptyStateEl, loadingEl, previewOverla
 let allMedia = [];
 let currentFilter = 'all';
 let searchQuery = '';
+let activeTabId = null;
 
 // ── Helpers ──
 
 function filenameFromUrl(url) {
   try {
+    if (url.startsWith('data:')) {
+      const mime = url.match(/^data:([^;,]+)/)?.[1] ?? '';
+      const ext = mime.split('/')[1]?.split('+')[0] ?? 'bin';
+      return `data.${ext}`;
+    }
     const pathname = new URL(url).pathname;
     return decodeURIComponent(pathname.split('/').filter(Boolean).at(-1) ?? 'file').slice(0, 80);
   } catch {
@@ -87,6 +94,10 @@ function filenameFromUrl(url) {
 
 function truncateUrl(url, max = 50) {
   try {
+    if (url.startsWith('data:')) {
+      const prefix = url.slice(0, url.indexOf(','));
+      return prefix.length > max ? prefix.slice(0, max) + '\u2026' : prefix;
+    }
     const u = new URL(url);
     const display = u.hostname + u.pathname;
     return display.length > max ? display.slice(0, max) + '\u2026' : display;
@@ -142,7 +153,7 @@ function createMediaItem(item, index) {
   } else {
     const ph = document.createElement('div');
     ph.className = 'media-thumb placeholder';
-    ph.textContent = '\uD83C\uDFA5';
+    ph.textContent = item.type === 'audio' ? '\uD83C\uDFB5' : '\uD83C\uDFA5';
     row.appendChild(ph);
   }
 
@@ -164,21 +175,44 @@ function createMediaItem(item, index) {
   badge.className = 'media-type-badge ' + item.type;
   badge.textContent = item.type;
 
+  meta.append(badge);
+
+  const extraBadges = [
+    item.blob && 'blob',
+    item.stream && 'stream',
+    item.embed && 'embed',
+  ].filter(Boolean);
+  for (const key of extraBadges) {
+    const b = document.createElement('span');
+    b.className = 'media-type-badge ' + key;
+    b.textContent = key;
+    meta.append(b);
+  }
+
   const urlLabel = document.createElement('span');
   urlLabel.textContent = truncateUrl(item.url);
   urlLabel.title = item.url;
 
-  meta.append(badge, urlLabel);
+  meta.append(urlLabel);
   info.append(fnEl, meta);
   row.appendChild(info);
 
-  // Save button
-  const btn = document.createElement('button');
-  btn.className = 'save-btn';
-  btn.textContent = 'Save';
-  btn.dataset.url = item.url;
-  btn.dataset.filename = filename;
-  row.appendChild(btn);
+  // Action buttons
+  if (item.embed) {
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'Copy';
+    btn.dataset.url = item.url;
+    row.appendChild(btn);
+  } else {
+    const btn = document.createElement('button');
+    btn.className = 'save-btn';
+    btn.textContent = 'Save';
+    btn.dataset.url = item.url;
+    btn.dataset.filename = filename;
+    if (item.blob) btn.dataset.blob = 'true';
+    row.appendChild(btn);
+  }
 
   return row;
 }
@@ -206,37 +240,69 @@ function renderMedia(mediaItems) {
 
   const images = mediaItems.filter((m) => m.type === 'image').length;
   const videos = mediaItems.filter((m) => m.type === 'video').length;
-  summary.textContent = 'Found ' + images + ' image' + (images !== 1 ? 's' : '') +
-    ' and ' + videos + ' video' + (videos !== 1 ? 's' : '');
+  const audios = mediaItems.filter((m) => m.type === 'audio').length;
+  let text = 'Found ' + images + ' image' + (images !== 1 ? 's' : '') +
+    ', ' + videos + ' video' + (videos !== 1 ? 's' : '');
+  if (audios > 0) text += ', ' + audios + ' audio';
+  summary.textContent = text;
 }
 
 // ── Event Handlers ──
 
 mediaListEl.addEventListener('click', async (e) => {
+  // Copy URL for embed items
+  const copyBtn = e.target.closest('.copy-btn');
+  if (copyBtn) {
+    try {
+      await navigator.clipboard.writeText(copyBtn.dataset.url);
+      copyBtn.textContent = 'Copied!';
+      copyBtn.classList.add('saved');
+      setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('saved'); }, 2000);
+    } catch {
+      copyBtn.textContent = 'Failed';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+    }
+    return;
+  }
+
   const btn = e.target.closest('.save-btn');
   if (!btn || btn.classList.contains('saved')) return;
 
   btn.textContent = '\u2026';
-  const response = await sendMsg({
-    action: 'download',
-    url: btn.dataset.url,
-    filename: btn.dataset.filename,
-  });
+
+  const isBlob = btn.dataset.blob === 'true';
+  const response = isBlob
+    ? await sendMsg({
+        action: 'downloadBlob',
+        blobUrl: btn.dataset.url,
+        filename: btn.dataset.filename,
+        tabId: activeTabId,
+      })
+    : await sendMsg({
+        action: 'download',
+        url: btn.dataset.url,
+        filename: btn.dataset.filename,
+      });
 
   if (response?.success) {
     btn.textContent = 'Saved';
     btn.classList.add('saved');
   } else {
     btn.textContent = 'Error';
-    setTimeout(() => { btn.textContent = 'Save'; }, 2000);
+    btn.title = response?.error || 'Download failed';
+    setTimeout(() => { btn.textContent = 'Save'; btn.title = ''; }, 2000);
   }
 });
 
 saveAllBtn.addEventListener('click', async () => {
-  const items = getFiltered().map((m) => ({
-    url: m.url,
-    filename: filenameFromUrl(m.url),
-  }));
+  const items = getFiltered()
+    .filter((m) => !m.embed)
+    .map((m) => ({
+      url: m.url,
+      filename: filenameFromUrl(m.url),
+      blob: !!m.blob,
+      tabId: activeTabId,
+    }));
 
   saveAllBtn.textContent = 'Saving\u2026';
   saveAllBtn.disabled = true;
@@ -355,8 +421,8 @@ mediaListEl.addEventListener('mouseenter', (e) => {
   const item = e.target.closest('.media-item');
   if (!item) return;
 
-  // Dismiss preview when entering save button
-  if (e.target.closest('.save-btn')) {
+  // Dismiss preview when entering action button
+  if (e.target.closest('.save-btn') || e.target.closest('.copy-btn')) {
     cancelPendingPreview();
     hidePreview();
     return;
@@ -376,7 +442,7 @@ mediaListEl.addEventListener('mouseleave', (e) => {
 
   // Only dismiss when truly leaving the row (relatedTarget is outside this item)
   const goingTo = e.relatedTarget;
-  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn')) return;
+  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn') && !goingTo.closest('.copy-btn')) return;
 
   cancelPendingPreview();
   hidePreview();
@@ -459,6 +525,7 @@ async function init() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab');
+    activeTabId = tab.id;
 
     const pageUrl = canonicalUrl(tab.url);
     const cached = await getCachedMedia(pageUrl);
