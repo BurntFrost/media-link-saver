@@ -34,11 +34,16 @@ const filterBtns = filters.map(({ key, label }) => {
 });
 filterRow.append(...filterBtns);
 
+const searchInput = document.createElement('input');
+searchInput.id = 'search-input';
+searchInput.type = 'text';
+searchInput.placeholder = 'Search media\u2026';
+
 const saveAllBtn = document.createElement('button');
 saveAllBtn.id = 'save-all-btn';
 saveAllBtn.disabled = true;
 saveAllBtn.textContent = 'Save All';
-controls.append(filterRow, saveAllBtn);
+controls.append(filterRow, searchInput, saveAllBtn);
 
 // Media list
 const mediaListEl = document.createElement('div');
@@ -67,6 +72,7 @@ app.append(header, controls, mediaListEl, emptyStateEl, loadingEl, previewOverla
 
 let allMedia = [];
 let currentFilter = 'all';
+let searchQuery = '';
 
 // ── Helpers ──
 
@@ -90,9 +96,19 @@ function truncateUrl(url, max = 50) {
 }
 
 function getFiltered() {
-  return currentFilter === 'all'
+  let items = currentFilter === 'all'
     ? allMedia
     : allMedia.filter((m) => m.type === currentFilter);
+
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    items = items.filter((m) =>
+      m.url.toLowerCase().includes(q) ||
+      filenameFromUrl(m.url).toLowerCase().includes(q)
+    );
+  }
+
+  return items;
 }
 
 function sendMsg(msg) {
@@ -170,9 +186,7 @@ function createMediaItem(item, index) {
 // ── Rendering ──
 
 function renderMedia(mediaItems) {
-  const filtered = currentFilter === 'all'
-    ? mediaItems
-    : mediaItems.filter((m) => m.type === currentFilter);
+  const filtered = getFiltered();
 
   if (filtered.length === 0) {
     mediaListEl.replaceChildren();
@@ -249,6 +263,11 @@ for (const btn of filterBtns) {
     renderMedia(allMedia);
   });
 }
+
+searchInput.addEventListener('input', () => {
+  searchQuery = searchInput.value.trim();
+  renderMedia(allMedia);
+});
 
 // ── Hover Preview ──
 
@@ -335,6 +354,14 @@ function cancelPendingPreview() {
 mediaListEl.addEventListener('mouseenter', (e) => {
   const item = e.target.closest('.media-item');
   if (!item) return;
+
+  // Dismiss preview when entering save button
+  if (e.target.closest('.save-btn')) {
+    cancelPendingPreview();
+    hidePreview();
+    return;
+  }
+
   cancelPendingPreview();
   hoverTimer = setTimeout(() => {
     const idx = parseInt(item.dataset.index, 10);
@@ -346,16 +373,103 @@ mediaListEl.addEventListener('mouseenter', (e) => {
 mediaListEl.addEventListener('mouseleave', (e) => {
   const item = e.target.closest('.media-item');
   if (!item) return;
+
+  // Only dismiss when truly leaving the row (relatedTarget is outside this item)
+  const goingTo = e.relatedTarget;
+  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn')) return;
+
   cancelPendingPreview();
   hidePreview();
 }, true);
 
+// ── IndexedDB Cache ──
+
+const CACHE_DB_NAME = 'MediaLinkSaverDB';
+const CACHE_STORE = 'mediaCache';
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function canonicalUrl(url) {
+  try {
+    const u = new URL(url);
+    u.hash = '';
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function openCacheDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(CACHE_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(CACHE_STORE, { keyPath: 'pageUrl' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getCachedMedia(pageUrl) {
+  try {
+    const db = await openCacheDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(CACHE_STORE, 'readonly');
+      const req = tx.objectStore(CACHE_STORE).get(pageUrl);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedMedia(pageUrl, media) {
+  try {
+    const db = await openCacheDB();
+    const tx = db.transaction(CACHE_STORE, 'readwrite');
+    tx.objectStore(CACHE_STORE).put({ pageUrl, media, timestamp: Date.now() });
+  } catch {
+    // Cache write failure is non-critical
+  }
+}
+
 // ── Init: inject content script on demand, then fetch media ──
+
+function liveScan(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { action: 'getMedia' }, (response) => {
+      if (chrome.runtime.lastError || !response?.media) {
+        resolve(null);
+      } else {
+        resolve(response.media);
+      }
+    });
+  });
+}
+
+function mediaEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].url !== b[i].url || a[i].type !== b[i].type) return false;
+  }
+  return true;
+}
 
 async function init() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab');
+
+    const pageUrl = canonicalUrl(tab.url);
+    const cached = await getCachedMedia(pageUrl);
+    const isFresh = cached && (Date.now() - cached.timestamp < CACHE_TTL_MS);
+
+    if (cached) {
+      // Show cached results immediately
+      loadingEl.classList.add('hidden');
+      allMedia = cached.media;
+      renderMedia(allMedia);
+    }
 
     // Inject the content script into the active tab (idempotent — won't double-inject)
     await chrome.scripting.executeScript({
@@ -363,21 +477,24 @@ async function init() {
       files: ['content/content.js'],
     });
 
-    chrome.tabs.sendMessage(tab.id, { action: 'getMedia' }, (response) => {
-      loadingEl.classList.add('hidden');
+    const freshMedia = await liveScan(tab.id);
+    loadingEl.classList.add('hidden');
 
-      if (chrome.runtime.lastError || !response?.media) {
-        emptyStateEl.classList.remove('hidden');
-        summary.textContent = 'Could not scan this page';
-        return;
+    if (freshMedia) {
+      await setCachedMedia(pageUrl, freshMedia);
+
+      // Only re-render if results differ from what's displayed
+      if (!cached || !mediaEqual(allMedia, freshMedia)) {
+        allMedia = freshMedia;
+        renderMedia(allMedia);
       }
-
-      allMedia = response.media;
-      renderMedia(allMedia);
-    });
+    } else if (!cached) {
+      emptyStateEl.classList.remove('hidden');
+      summary.textContent = 'Could not scan this page';
+    }
   } catch {
     loadingEl.classList.add('hidden');
-    emptyStateEl.classList.remove('hidden');
+    if (!allMedia.length) emptyStateEl.classList.remove('hidden');
   }
 }
 
