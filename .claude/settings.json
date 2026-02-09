@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'manifest.json'; then echo '⛔ manifest.json is security-critical (permissions + CSP). Please confirm this edit is intentional.' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$CLAUDE_TOOL_INPUT\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get('file_path',''))\" 2>/dev/null); if [ -n \"$FILE\" ] && echo \"$FILE\" | grep -qE '\\.js$' && [ -f \"$FILE\" ]; then VIOLATIONS=$(grep -nE 'innerHTML|outerHTML|eval\\(|new Function\\(|onclick=|onload=|onchange=|onsubmit=' \"$FILE\" 2>/dev/null); if [ -n \"$VIOLATIONS\" ]; then echo \"⚠️  CSP violation detected in $FILE:\" >&2; echo \"$VIOLATIONS\" >&2; echo 'Use DOM APIs only: createElement, textContent, addEventListener' >&2; exit 1; fi; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
