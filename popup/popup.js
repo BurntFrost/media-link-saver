@@ -122,6 +122,19 @@ function getFiltered() {
   return items;
 }
 
+function deduplicateMedia(items) {
+  const seenUrls = new Set();
+  const seenNames = new Set();
+  return items.filter((item) => {
+    if (seenUrls.has(item.url)) return false;
+    seenUrls.add(item.url);
+    const name = filenameFromUrl(item.url);
+    if (seenNames.has(name)) return false;
+    seenNames.add(name);
+    return true;
+  });
+}
+
 function sendMsg(msg) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(msg, resolve);
@@ -220,6 +233,23 @@ function createMediaItem(item, index) {
 // ── Rendering ──
 
 function renderMedia(mediaItems) {
+  // Show/hide filter tabs based on available types
+  const typeCounts = { image: 0, video: 0, audio: 0 };
+  for (const item of allMedia) {
+    if (item.type in typeCounts) typeCounts[item.type]++;
+  }
+  for (const btn of filterBtns) {
+    const key = btn.dataset.filter;
+    if (key === 'all') continue;
+    btn.classList.toggle('hidden', typeCounts[key] === 0);
+  }
+  // Reset to 'all' if active filter has no results
+  if (currentFilter !== 'all' && typeCounts[currentFilter] === 0) {
+    currentFilter = 'all';
+    for (const b of filterBtns) b.classList.remove('active');
+    filterBtns[0].classList.add('active');
+  }
+
   const filtered = getFiltered();
 
   if (filtered.length === 0) {
@@ -534,7 +564,7 @@ async function init() {
     if (cached) {
       // Show cached results immediately
       loadingEl.classList.add('hidden');
-      allMedia = cached.media;
+      allMedia = deduplicateMedia(cached.media);
       renderMedia(allMedia);
     }
 
@@ -552,7 +582,7 @@ async function init() {
 
       // Only re-render if results differ from what's displayed
       if (!cached || !mediaEqual(allMedia, freshMedia)) {
-        allMedia = freshMedia;
+        allMedia = deduplicateMedia(freshMedia);
         renderMedia(allMedia);
       }
     } else if (!cached) {
