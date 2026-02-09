@@ -44,7 +44,23 @@ const saveAllBtn = document.createElement('button');
 saveAllBtn.id = 'save-all-btn';
 saveAllBtn.disabled = true;
 saveAllBtn.textContent = 'Save All';
-controls.append(filterRow, searchInput, saveAllBtn);
+const sortSelect = document.createElement('select');
+sortSelect.id = 'sort-select';
+for (const [value, label] of [
+  ['default', 'Default'],
+  ['name-asc', 'Name A\u2013Z'],
+  ['name-desc', 'Name Z\u2013A'],
+]) {
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = label;
+  sortSelect.appendChild(opt);
+}
+
+const controlsRow = document.createElement('div');
+controlsRow.className = 'controls-row';
+controlsRow.append(filterRow, sortSelect, saveAllBtn);
+controls.append(searchInput, controlsRow);
 
 // Media list
 const mediaListEl = document.createElement('div');
@@ -58,21 +74,40 @@ const emptyP = document.createElement('p');
 emptyP.textContent = 'No media links found on this page.';
 emptyStateEl.appendChild(emptyP);
 
-// Loading
+// Loading (skeleton cards)
 const loadingEl = document.createElement('div');
 loadingEl.id = 'loading';
-loadingEl.textContent = 'Scanning page\u2026';
+for (let i = 0; i < 4; i++) {
+  const skel = document.createElement('div');
+  skel.className = 'skeleton-item';
+  const thumb = document.createElement('div');
+  thumb.className = 'skeleton-thumb';
+  const info = document.createElement('div');
+  info.className = 'skeleton-info';
+  const line1 = document.createElement('div');
+  line1.className = 'skeleton-line';
+  const line2 = document.createElement('div');
+  line2.className = 'skeleton-line short';
+  info.append(line1, line2);
+  skel.append(thumb, info);
+  loadingEl.appendChild(skel);
+}
 
 // Preview overlay
 const previewOverlay = document.createElement('div');
 previewOverlay.id = 'preview-overlay';
 
-app.append(header, controls, mediaListEl, emptyStateEl, loadingEl, previewOverlay);
+// Toast notification
+const toastEl = document.createElement('div');
+toastEl.id = 'toast';
+
+app.append(header, controls, mediaListEl, emptyStateEl, loadingEl, previewOverlay, toastEl);
 
 // ── State ──
 
 let allMedia = [];
 let currentFilter = 'all';
+let currentSort = 'default';
 let searchQuery = '';
 let activeTabId = null;
 let activePageUrl = null;
@@ -121,6 +156,12 @@ function getFiltered() {
     );
   }
 
+  if (currentSort === 'name-asc') {
+    items = [...items].sort((a, b) => filenameFromUrl(a.url).localeCompare(filenameFromUrl(b.url)));
+  } else if (currentSort === 'name-desc') {
+    items = [...items].sort((a, b) => filenameFromUrl(b.url).localeCompare(filenameFromUrl(a.url)));
+  }
+
   return items;
 }
 
@@ -143,12 +184,21 @@ function sendMsg(msg) {
   });
 }
 
+let toastTimer = null;
+function showToast(text, type = 'success') {
+  clearTimeout(toastTimer);
+  toastEl.textContent = text;
+  toastEl.className = 'visible ' + type;
+  toastTimer = setTimeout(() => { toastEl.className = ''; }, 2500);
+}
+
 // ── Build a single media-item DOM node ──
 
 function createMediaItem(item, index) {
   const row = document.createElement('div');
   row.className = 'media-item';
   row.dataset.index = index;
+  row.style.animationDelay = `${Math.min(index * 30, 300)}ms`;
 
   // Thumbnail
   if (item.type === 'image') {
@@ -239,7 +289,7 @@ function createMediaItem(item, index) {
 
 // ── Rendering ──
 
-function renderMedia(mediaItems) {
+function renderMedia(mediaItems, animate = false) {
   // Show/hide filter tabs based on available types
   const typeCounts = { image: 0, video: 0, audio: 0 };
   for (const item of allMedia) {
@@ -273,6 +323,8 @@ function renderMedia(mediaItems) {
   for (let i = 0; i < filtered.length; i++) {
     fragment.appendChild(createMediaItem(filtered[i], i));
   }
+
+  mediaListEl.classList.toggle('animate-items', animate);
   mediaListEl.replaceChildren(fragment);
 
   const images = mediaItems.filter((m) => m.type === 'image').length;
@@ -294,9 +346,11 @@ mediaListEl.addEventListener('click', async (e) => {
       await navigator.clipboard.writeText(copyBtn.dataset.url);
       copyBtn.textContent = 'Copied!';
       copyBtn.classList.add('saved');
+      showToast('URL copied to clipboard', 'info');
       setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('saved'); }, 2000);
     } catch {
       copyBtn.textContent = 'Failed';
+      showToast('Failed to copy', 'error');
       setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
     }
     return;
@@ -328,6 +382,7 @@ mediaListEl.addEventListener('click', async (e) => {
   } else {
     btn.textContent = 'Error';
     btn.title = response?.error || 'Download failed';
+    showToast(response?.error || 'Download failed', 'error');
     setTimeout(() => { btn.textContent = 'Save'; btn.title = ''; }, 2000);
   }
 });
@@ -344,19 +399,28 @@ saveAllBtn.addEventListener('click', async () => {
 
   saveAllBtn.textContent = 'Saving\u2026';
   saveAllBtn.disabled = true;
+  saveAllBtn.classList.add('saving');
 
   const response = await sendMsg({ action: 'downloadAll', items });
+  saveAllBtn.classList.remove('saving');
 
   if (response?.success) {
-    saveAllBtn.textContent = 'Saved ' + (response.total - response.failed) + '/' + response.total;
+    const saved = response.total - response.failed;
+    saveAllBtn.textContent = 'Saved ' + saved + '/' + response.total;
     for (const btn of mediaListEl.querySelectorAll('.save-btn:not(.saved)')) {
       btn.textContent = 'Saved';
       btn.classList.add('saved');
       savedUrls.add(btn.dataset.url);
     }
+    if (response.failed > 0) {
+      showToast(`Saved ${saved}/${response.total} \u2014 ${response.failed} failed`, 'error');
+    } else {
+      showToast(`Saved all ${response.total} files`, 'success');
+    }
   } else {
     saveAllBtn.textContent = 'Save All';
     saveAllBtn.disabled = false;
+    showToast('Save All failed', 'error');
   }
 });
 
@@ -365,9 +429,14 @@ for (const btn of filterBtns) {
     for (const b of filterBtns) b.classList.remove('active');
     btn.classList.add('active');
     currentFilter = btn.dataset.filter;
-    renderMedia(allMedia);
+    renderMedia(allMedia, true);
   });
 }
+
+sortSelect.addEventListener('change', () => {
+  currentSort = sortSelect.value;
+  renderMedia(allMedia, true);
+});
 
 searchInput.addEventListener('input', () => {
   searchQuery = searchInput.value.trim();
@@ -575,7 +644,7 @@ async function init() {
       // Show cached results immediately
       loadingEl.classList.add('hidden');
       allMedia = deduplicateMedia(cached.media);
-      renderMedia(allMedia);
+      renderMedia(allMedia, true);
     }
 
     // Inject the content script into the active tab (idempotent — won't double-inject)
@@ -593,7 +662,7 @@ async function init() {
       // Only re-render if results differ from what's displayed
       if (!cached || !mediaEqual(allMedia, freshMedia)) {
         allMedia = deduplicateMedia(freshMedia);
-        renderMedia(allMedia);
+        renderMedia(allMedia, true);
       }
     } else if (!cached) {
       emptyStateEl.classList.remove('hidden');

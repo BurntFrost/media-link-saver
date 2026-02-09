@@ -19,37 +19,44 @@ body {
 header {
   background: linear-gradient(135deg, #6c5ce7, #a855f7);
   color: #fff;
-  padding: 14px 16px 10px;
+  padding: 8px 14px;
   position: sticky;
   top: 0;
   z-index: 10;
   contain: layout paint;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
 }
 
 header h1 {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 #summary {
-  font-size: 12px;
-  opacity: 0.85;
-  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 /* Controls */
 #controls {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 8px 12px;
-  gap: 8px;
+  gap: 6px;
   border-bottom: 1px solid #e5e7eb;
   background: #fff;
   position: sticky;
-  top: 62px;
+  top: 34px;
   z-index: 9;
   contain: layout paint;
+}
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .filter-row {
@@ -78,9 +85,8 @@ header h1 {
 }
 
 #search-input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 10px;
+  width: 100%;
+  padding: 6px 10px;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-size: 12px;
@@ -98,6 +104,7 @@ header h1 {
 }
 
 #save-all-btn {
+  margin-left: auto;
   padding: 5px 12px;
   border: none;
   border-radius: 6px;
@@ -261,11 +268,143 @@ header h1 {
   background: #10b981;
 }
 
-/* States */
+/* ── Sort Select ── */
+
+#sort-select {
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 11px;
+  background: #fff;
+  color: #1a1a2e;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#sort-select:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
+}
+
+/* ── Skeleton Loading ── */
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 #loading {
-  text-align: center;
-  padding: 32px 16px;
-  color: #6b7280;
+  padding: 6px 12px 12px;
+}
+
+.skeleton-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.skeleton-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  background: #e5e7eb;
+  flex-shrink: 0;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skeleton-line {
+  height: 10px;
+  border-radius: 4px;
+  background: #e5e7eb;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+  width: 65%;
+}
+
+.skeleton-line.short {
+  width: 40%;
+  animation-delay: 0.15s;
+}
+
+/* ── Item Entrance Animation ── */
+
+@keyframes item-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-items .media-item {
+  animation: item-enter 0.2s ease-out both;
+}
+
+/* ── Toast Notification ── */
+
+#toast {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%) translateY(120%);
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  z-index: 200;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+  white-space: nowrap;
+}
+
+#toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+#toast.success {
+  background: #065f46;
+  color: #d1fae5;
+}
+
+#toast.error {
+  background: #991b1b;
+  color: #fee2e2;
+}
+
+#toast.info {
+  background: #1e3a5f;
+  color: #dbeafe;
+}
+
+/* ── Save All Saving State ── */
+
+@keyframes save-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+#save-all-btn.saving {
+  animation: save-pulse 1s ease-in-out infinite;
+  background: #059669;
 }
 
 #empty-state {

@@ -25,8 +25,35 @@ if (!globalThis.__mediaLinkSaverInjected) {
   const TRACKING_RE = /\/pixel[./?]|\/tr[./?]|1x1|spacer/i;
   const BG_URL_RE = /url\(["']?(.+?)["']?\)/;
 
-  // URL patterns for non-content assets (favicons, sprites, emoji CDNs)
-  const ASSET_RE = /\bfavicon\b|apple-touch-icon|\/sprites?\b|\/emojis?\/|\/twemoji\//i;
+  // URL patterns for non-content assets (favicons, sprites, emoji CDNs,
+  // avatars, profile pictures, subreddit styling, common web chrome)
+  const ASSET_RE = new RegExp([
+    // Icons & UI chrome
+    '\\bfavicon\\b',
+    'apple-touch-icon',
+    '\\/sprites?\\b',
+    '\\/emojis?\\/|/twemoji\\/',
+    '\\/(?:badges?|logos?|icons?)\\/',
+    '\\/social[-_]?icons?',
+    // Avatar & profile services
+    'gravatar\\.com',
+    'ui-avatars\\.com',
+    'dicebear\\.com',
+    '\\/avatars?(?:\\/|\\?|$)',
+    '\\/profile[-_]?(?:images?|photos?|pics?|icons?)\\b',
+    // Avatar/profile filenames
+    '(?:default|user|profile|anonymous)[-_]?avatar',
+    'profileIcon[-_]',
+    'communityIcon[-_]',
+    'snoovatar',
+    // Reddit subreddit styling
+    'styles\\.redditmedia\\.com',
+    'redditstatic\\.com\\/avatars',
+    // Common site-chrome paths
+    'bannerBackground',
+    '\\/(?:site|web)[-_]?assets?\\/(?:img|icons?|ui)\\/',
+    '\\/static\\/(?:img|images|icons)\\/',
+  ].join('|'), 'i');
 
   // Minimum intrinsic dimension (px) for <img> — smaller are likely icons/avatars/UI chrome
   const MIN_CONTENT_DIM = 80;
