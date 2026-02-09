@@ -1,0 +1,269 @@
+/* Media Link Saver — Popup Styles */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 420px;
+  max-height: 520px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #1a1a2e;
+  background: #f8f9fb;
+  overflow-y: auto;
+}
+
+header {
+  background: linear-gradient(135deg, #6c5ce7, #a855f7);
+  color: #fff;
+  padding: 14px 16px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  contain: layout paint;
+}
+
+header h1 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+#summary {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+
+/* Controls */
+#controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  gap: 8px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  position: sticky;
+  top: 62px;
+  z-index: 9;
+  contain: layout paint;
+}
+
+.filter-row {
+  display: flex;
+  gap: 4px;
+}
+
+.filter-btn {
+  padding: 4px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.filter-btn:hover {
+  background: #f3f0ff;
+}
+
+.filter-btn.active {
+  background: #6c5ce7;
+  color: #fff;
+  border-color: #6c5ce7;
+}
+
+#save-all-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #10b981;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+#save-all-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+#save-all-btn:disabled {
+  background: #d1d5db;
+  cursor: default;
+}
+
+/* Media list */
+#media-list {
+  padding: 6px 12px 12px;
+}
+
+.media-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+  contain: layout style;
+  transition: box-shadow 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.media-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.media-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #f3f4f6;
+  flex-shrink: 0;
+}
+
+.media-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #9ca3af;
+}
+
+.media-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.media-filename {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-meta {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.media-type-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+
+.media-type-badge.image {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.media-type-badge.video {
+  background: #fce7f3;
+  color: #db2777;
+}
+
+.save-btn {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #6c5ce7;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.save-btn:hover {
+  opacity: 0.8;
+}
+
+.save-btn.saved {
+  background: #10b981;
+  cursor: default;
+}
+
+/* States */
+#loading {
+  text-align: center;
+  padding: 32px 16px;
+  color: #6b7280;
+}
+
+#empty-state {
+  text-align: center;
+  padding: 32px 16px;
+  color: #9ca3af;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ── Hover Preview Overlay ── */
+
+#preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0);
+  opacity: 0;
+  visibility: hidden;
+  will-change: opacity;
+  transition: background 0.3s ease, opacity 0.3s ease, visibility 0.3s;
+}
+
+#preview-overlay.visible {
+  background: rgba(0, 0, 0, 0.7);
+  opacity: 1;
+  visibility: visible;
+}
+
+#preview-overlay img,
+#preview-overlay video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  object-fit: contain;
+  background: #000;
+  transform: scale(0.92);
+  opacity: 0;
+  will-change: transform, opacity;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.3s ease;
+}
+
+#preview-overlay.visible img,
+#preview-overlay.visible video {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.media-item.previewing {
+  background: #f5f3ff;
+  box-shadow: 0 0 0 2px #a855f7, 0 4px 12px rgba(168, 85, 247, 0.15);
+  transform: scale(1.01);
+}
