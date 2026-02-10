@@ -132,9 +132,14 @@ if (!globalThis.__mediaLinkSaverInjected) {
   }
 
   function parseSrcset(srcset) {
+    // HTML spec: srcset entries are comma-separated, but commas can appear
+    // in URLs (e.g. CDN query params). Split on commas followed by a
+    // descriptor or another URL to avoid breaking mid-URL.
     const urls = [];
-    for (const entry of srcset.split(',')) {
-      const url = entry.trimStart().split(/\s/, 1)[0];
+    const re = /\s*((?:[^,\s]|\s(?![^,]*\b\d+[wx]\b))+)/g;
+    let m;
+    while ((m = re.exec(srcset)) !== null) {
+      const url = m[1].trim().split(/\s/)[0];
       if (url) urls.push(url);
     }
     return urls;
@@ -510,7 +515,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
     // Inline script video URL extraction — catches SPAs that embed video
     // data in JS (Nuxt __NUXT__, Next __NEXT_DATA__, Redux stores, etc.)
-    const INLINE_VIDEO_RE = /https?:[^\s"'<>{}]+?\.(?:mp4|webm|mov|mkv|m4v|m3u8|mpd)/gi;
+    const INLINE_VIDEO_RE = /https?:\/\/[^\s"'<>{}]{1,2048}?\.(?:mp4|webm|mov|mkv|m4v|m3u8|mpd)/gi;
     for (const script of document.querySelectorAll('script:not([src])')) {
       const text = script.textContent;
       if (!text || text.length > 500_000) continue;

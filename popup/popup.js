@@ -183,6 +183,9 @@ function sendMsg(msg) {
 let toastTimer = null;
 function showToast(text, type = 'success') {
   clearTimeout(toastTimer);
+  // Reset class first to restart CSS transition when called rapidly
+  toastEl.className = '';
+  toastEl.offsetWidth; // force reflow
   toastEl.textContent = text;
   toastEl.className = 'visible ' + type;
   toastTimer = setTimeout(() => { toastEl.className = ''; }, 2500);
