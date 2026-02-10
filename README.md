@@ -9,17 +9,19 @@
 ## Features
 
 - **Deep media detection** — scans 12+ sources including `<img>`, `<video>`, `<audio>`, `<picture>`, CSS backgrounds, Open Graph / Twitter Card meta tags, JSON-LD structured data, `<noscript>` fallbacks, preload hints, iframe embeds, canvas snapshots, and shadow DOM
-- **Live sync** — MutationObserver keeps the media list in sync as you scroll, with automatic idle-time rescans for SPAs and infinite-scroll pages
+- **Live sync** — MutationObserver keeps the media list in sync as you scroll, with automatic idle-time rescans for SPAs and infinite-scroll pages. Each shadow root gets its own observer, so media injected into dynamically-created web components is caught immediately
 - **Smart filtering** — excludes favicons, avatars, sprites, tracking pixels, and other non-content assets automatically
+- **Resolution-aware dedup** — same image served at different CDN sizes (e.g. `?width=320` vs `?width=640`) collapses to a single entry, keeping the highest resolution variant
 - **Filter by type** — toggle between All, Images, Videos, and Audio
 - **Search** — instantly filter results by filename or URL
 - **Sort** — order by name (A–Z or Z–A)
 - **Hover preview** — see a full-size image or auto-playing video preview on hover
-- **Save individually or in bulk** — download a single file or hit Save All for everything matching your current filter
-- **Blob URL resolution** — handles JavaScript-generated blob URLs by resolving them to real URLs or converting via data URI
+- **Save individually or in bulk** — download a single file or hit Save All for everything matching your current filter. Partial failures re-enable Save All so you can retry, and only the items that actually succeeded are marked as saved
+- **Blob URL resolution** — handles JavaScript-generated blob URLs by fetching the blob in the page context and downloading via `<a download>`, bypassing Chrome's data URL size limit so videos of any size work
 - **Instant popup** — IndexedDB caching (5-minute TTL) displays cached results immediately while a fresh scan runs in the background
 - **Skeleton loading** — smooth loading UI with skeleton cards while scanning
 - **Toast notifications** — visual feedback on download success/failure
+- **Memory-safe** — media list capped at 5,000 items to prevent unbounded growth on infinite-scroll pages; shadow roots cached incrementally to avoid full DOM re-walks
 - **Lightweight** — zero external dependencies, fully CSP-compliant, no build step
 
 ## Install
@@ -54,8 +56,8 @@ Three-component message-passing design:
 | Component | Files | Role |
 |-----------|-------|------|
 | **Popup** | `popup/popup.html` `popup.js` `popup.css` | UI layer — filter controls, search, sort, hover preview, download buttons. Built entirely via DOM APIs |
-| **Content Script** | `content/content.js` | Injected on demand into the active tab. Scans DOM for media, watches for mutations via MutationObserver |
-| **Service Worker** | `background/service-worker.js` | Handles downloads with concurrency control (max 4 parallel), including blob URL resolution via MAIN world injection |
+| **Content Script** | `content/content.js` | Injected on demand into the active tab. Scans DOM for media, watches for mutations via MutationObserver on `document.body` and each discovered shadow root |
+| **Service Worker** | `background/service-worker.js` | Handles downloads with concurrency control (max 4 parallel). Blob URLs are resolved by injecting a MAIN world script that fetches the blob and triggers an `<a download>` click |
 
 ## Media Detection Sources
 
@@ -71,7 +73,7 @@ Three-component message-passing design:
 | 8 | JSON-LD | `<script type="application/ld+json">` structured data |
 | 9 | Iframe embeds | YouTube, Vimeo, Dailymotion converted to native URLs |
 | 10 | Canvas | `<canvas>` captured as PNG (50–4096px range) |
-| 11 | Shadow DOM | Recursively traverses all shadow roots |
+| 11 | Shadow DOM | Recursively traverses all shadow roots (open and closed), with per-root mutation observers for SPA-injected components |
 | 12 | Links | `<a href>` pointing to media file extensions |
 
 ## Supported Formats
