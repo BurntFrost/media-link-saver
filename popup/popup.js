@@ -165,13 +165,58 @@ function getFiltered() {
   return items;
 }
 
+// Query params that only affect resolution/format, not content identity.
+// Stripping these lets us recognise the same image at different sizes.
+const RESOLUTION_PARAMS = new Set([
+  'width', 'height', 'w', 'h', 'size', 'resize',
+  'quality', 'q', 'dpr', 'fit', 'crop', 'auto',
+  'format', 'fm', 'fl', 's',
+]);
+
+function normalizeForDedup(url) {
+  try {
+    if (url.startsWith('data:')) return url;
+    const u = new URL(url);
+    for (const p of RESOLUTION_PARAMS) u.searchParams.delete(p);
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function getWidthParam(url) {
+  try {
+    const u = new URL(url);
+    return parseInt(u.searchParams.get('width') ?? u.searchParams.get('w') ?? '0', 10);
+  } catch {
+    return 0;
+  }
+}
+
 function deduplicateMedia(items) {
   const seenUrls = new Set();
-  return items.filter((item) => {
-    if (seenUrls.has(item.url)) return false;
+  const seenNormalized = new Map(); // normalized URL → index in result
+  const result = [];
+
+  for (const item of items) {
+    if (seenUrls.has(item.url)) continue;
     seenUrls.add(item.url);
-    return true;
-  });
+
+    const norm = normalizeForDedup(item.url);
+    if (seenNormalized.has(norm)) {
+      // Same image at different resolution — keep the largest
+      const idx = seenNormalized.get(norm);
+      if (getWidthParam(item.url) > getWidthParam(result[idx].url)) {
+        result[idx] = item;
+      }
+      continue;
+    }
+
+    seenNormalized.set(norm, result.length);
+    result.push(item);
+  }
+
+  return result;
 }
 
 function sendMsg(msg) {

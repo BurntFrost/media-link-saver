@@ -132,14 +132,9 @@ if (!globalThis.__mediaLinkSaverInjected) {
   }
 
   function parseSrcset(srcset) {
-    // HTML spec: srcset entries are comma-separated, but commas can appear
-    // in URLs (e.g. CDN query params). Split on commas followed by a
-    // descriptor or another URL to avoid breaking mid-URL.
     const urls = [];
-    const re = /\s*((?:[^,\s]|\s(?![^,]*\b\d+[wx]\b))+)/g;
-    let m;
-    while ((m = re.exec(srcset)) !== null) {
-      const url = m[1].trim().split(/\s/)[0];
+    for (const entry of srcset.split(',')) {
+      const url = entry.trimStart().split(/\s/, 1)[0];
       if (url) urls.push(url);
     }
     return urls;
