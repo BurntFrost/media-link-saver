@@ -167,13 +167,9 @@ function getFiltered() {
 
 function deduplicateMedia(items) {
   const seenUrls = new Set();
-  const seenNames = new Set();
   return items.filter((item) => {
     if (seenUrls.has(item.url)) return false;
     seenUrls.add(item.url);
-    const name = filenameFromUrl(item.url);
-    if (seenNames.has(name)) return false;
-    seenNames.add(name);
     return true;
   });
 }
@@ -406,15 +402,24 @@ saveAllBtn.addEventListener('click', async () => {
 
   if (response?.success) {
     const saved = response.total - response.failed;
-    saveAllBtn.textContent = 'Saved ' + saved + '/' + response.total;
+    const failedSet = new Set(response.failedUrls ?? []);
+
+    // Only mark buttons as "Saved" for items that actually succeeded
     for (const btn of mediaListEl.querySelectorAll('.save-btn:not(.saved)')) {
-      btn.textContent = 'Saved';
-      btn.classList.add('saved');
-      savedUrls.add(btn.dataset.url);
+      if (!failedSet.has(btn.dataset.url)) {
+        btn.textContent = 'Saved';
+        btn.classList.add('saved');
+        savedUrls.add(btn.dataset.url);
+      }
     }
+
     if (response.failed > 0) {
+      // Re-enable so user can retry the failed downloads
+      saveAllBtn.textContent = 'Save All';
+      saveAllBtn.disabled = false;
       showToast(`Saved ${saved}/${response.total} \u2014 ${response.failed} failed`, 'error');
     } else {
+      saveAllBtn.textContent = `Saved All ${saved}`;
       showToast(`Saved all ${response.total} files`, 'success');
     }
   } else {
@@ -496,26 +501,30 @@ function showPreview(mediaItem, itemEl) {
   activePreviewItem = itemEl;
 }
 
+// Persistent listener — clean up preview content after fade-out transition.
+// Placed outside hidePreview() to avoid accumulating { once: true } listeners
+// when hidePreview() is called rapidly or the transition never fires.
+previewOverlay.addEventListener('transitionend', () => {
+  if (!previewOverlay.classList.contains('visible')) {
+    const video = previewOverlay.querySelector('video');
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+    previewOverlay.replaceChildren();
+  }
+});
+
 function hidePreview() {
   previewAbort?.abort();
+  previewAbort = null;
   previewOverlay.classList.remove('visible');
 
   if (activePreviewItem) {
     activePreviewItem.classList.remove('previewing');
     activePreviewItem = null;
   }
-
-  previewOverlay.addEventListener('transitionend', () => {
-    if (!previewOverlay.classList.contains('visible')) {
-      const video = previewOverlay.querySelector('video');
-      if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      }
-      previewOverlay.replaceChildren();
-    }
-  }, { once: true });
 }
 
 function cancelPendingPreview() {
@@ -696,6 +705,9 @@ async function init() {
         renderMedia(allMedia);
       }
     }, POLL_MS);
+
+    // Clean up polling when popup closes
+    window.addEventListener('unload', () => clearInterval(pollId));
   } catch {
     loadingEl.classList.add('hidden');
     if (!allMedia.length) emptyStateEl.classList.remove('hidden');

@@ -94,6 +94,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
   const DATA_URI_MIN_LENGTH = 1000;
   const MIN_CANVAS_SIZE = 50;
   const MAX_CANVAS_SIZE = 4096;
+  const MAX_MEDIA_ITEMS = 5000;
 
   const EMBED_PATTERNS = [
     { re: /youtube\.com\/embed\/([a-zA-Z0-9_-]+)/, url: (id) => `https://www.youtube.com/watch?v=${id}` },
@@ -139,27 +140,92 @@ if (!globalThis.__mediaLinkSaverInjected) {
     return urls;
   }
 
-  // ── Shadow DOM traversal ──
+  // ── Scan scheduling (shared by MutationObservers and scroll handler) ──
+
+  let scanQueued = false;
+  const scheduleIdle = globalThis.requestIdleCallback
+    ? (cb) => requestIdleCallback(cb, { timeout: 500 })
+    : (cb) => setTimeout(cb, 80);
+
+  function queueRescan() {
+    if (scanQueued) return;
+    scanQueued = true;
+    scheduleIdle(() => {
+      scanQueued = false;
+      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
+    });
+  }
+
+  // ── Shadow DOM traversal (cached) ──
+  //
+  // chrome.dom.openOrClosedShadowRoot() can access closed shadow roots
+  // that el.shadowRoot cannot — available to Chrome extensions since Chrome 88.
+  //
+  // We cache discovered shadow roots and observe each one for mutations
+  // so that media injected inside dynamically-created shadow roots (common
+  // in SPAs like YouTube, Twitter, Reddit) triggers a rescan.
+
+  const knownShadowRoots = new Set();
+  let rootsInitialized = false;
+  const canOpenClosed = typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot;
+  const getShadowRoot = canOpenClosed
+    ? (el) => el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null
+    : (el) => el.shadowRoot;
+
+  const OBSERVED_ATTRS = [
+    'src', 'srcset', 'href', 'poster', 'style',
+    'data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src',
+  ];
+
+  function observeShadowRoot(shadowRoot) {
+    try {
+      new MutationObserver((mutations) => {
+        checkMutationsForShadowRoots(mutations);
+        queueRescan();
+      }).observe(shadowRoot, {
+        childList: true,
+        subtree: true,
+        attributeFilter: OBSERVED_ATTRS,
+      });
+    } catch { /* shadow root may be disconnected */ }
+  }
+
+  function walkForShadowRoots(root) {
+    for (const el of root.querySelectorAll('*')) {
+      const sr = getShadowRoot(el);
+      if (sr && !knownShadowRoots.has(sr)) {
+        knownShadowRoots.add(sr);
+        observeShadowRoot(sr);
+        walkForShadowRoots(sr);
+      }
+    }
+  }
+
+  function checkMutationsForShadowRoots(mutations) {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        const sr = getShadowRoot(node);
+        if (sr && !knownShadowRoots.has(sr)) {
+          knownShadowRoots.add(sr);
+          observeShadowRoot(sr);
+          walkForShadowRoots(sr);
+        }
+        if (node.querySelectorAll) walkForShadowRoots(node);
+      }
+    }
+  }
 
   function collectRoots() {
-    const roots = [document];
-    // chrome.dom.openOrClosedShadowRoot() can access closed shadow roots
-    // that el.shadowRoot cannot — available to Chrome extensions since Chrome 88
-    const canOpenClosed = typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot;
-    const getShadowRoot = canOpenClosed
-      ? (el) => el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null
-      : (el) => el.shadowRoot;
-    const walk = (root) => {
-      for (const el of root.querySelectorAll('*')) {
-        const sr = getShadowRoot(el);
-        if (sr) {
-          roots.push(sr);
-          walk(sr);
-        }
-      }
-    };
-    walk(document);
-    return roots;
+    if (!rootsInitialized) {
+      rootsInitialized = true;
+      walkForShadowRoots(document);
+    }
+    // Prune disconnected shadow roots
+    for (const sr of knownShadowRoots) {
+      if (!sr.host?.isConnected) knownShadowRoots.delete(sr);
+    }
+    return [document, ...knownShadowRoots];
   }
 
   function deepQuerySelectorAll(roots, selector) {
@@ -247,6 +313,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     const deep = (sel) => deepQuerySelectorAll(roots, sel);
 
     const add = (url, type, source, blob = false) => {
+      if (media.length >= MAX_MEDIA_ITEMS) return;
       if (!url || seen.has(url)) return;
       if (url.startsWith('javascript:')) return;
       // Allow large data: URIs (actual content), skip small ones (tracking pixels)
@@ -476,29 +543,17 @@ if (!globalThis.__mediaLinkSaverInjected) {
   // ── Live updates via MutationObserver ──
 
   globalThis.__mediaLinkSaverMedia = extractMediaLinks();
-  let scanQueued = false;
 
-  const scheduleIdle = globalThis.requestIdleCallback
-    ? (cb) => requestIdleCallback(cb, { timeout: 500 })
-    : (cb) => setTimeout(cb, 80);
-
-  const observer = new MutationObserver(() => {
-    if (scanQueued) return;
-    scanQueued = true;
-    scheduleIdle(() => {
-      scanQueued = false;
-      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
-    });
+  const bodyObserver = new MutationObserver((mutations) => {
+    checkMutationsForShadowRoots(mutations);
+    queueRescan();
   });
 
   if (document.body) {
-    observer.observe(document.body, {
+    bodyObserver.observe(document.body, {
       childList: true,
       subtree: true,
-      attributeFilter: [
-        'src', 'srcset', 'href', 'poster', 'style',
-        'data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src',
-      ],
+      attributeFilter: OBSERVED_ATTRS,
     });
   }
 
@@ -510,7 +565,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     scrollQueued = true;
     setTimeout(() => {
       scrollQueued = false;
-      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
+      queueRescan();
     }, 300);
   }, { passive: true });
 

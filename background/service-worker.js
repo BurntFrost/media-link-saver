@@ -30,34 +30,41 @@ function downloadFile(url, filename) {
   });
 }
 
-// Fetch a blob URL from the page's MAIN world and download via data URL
+// Fetch a blob URL from the page's MAIN world and trigger download via <a>.
+// Previous approach converted to data URL, but Chrome's download API caps
+// data URLs at ~2 MB — virtually all videos would silently fail.
 async function downloadBlob(blobUrl, filename, tabId) {
+  if (!tabId) {
+    return { success: false, error: 'No active tab' };
+  }
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: async (url) => {
+      func: async (url, fname) => {
         try {
           const res = await fetch(url);
           const blob = await res.blob();
-          return await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(blob);
-          });
+          const objUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = objUrl;
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(objUrl), 10_000);
+          return { ok: true };
         } catch {
           return null;
         }
       },
-      args: [blobUrl],
+      args: [blobUrl, filename],
     });
 
-    if (!result) {
-      return { success: false, error: 'Cannot download streaming video' };
+    if (result?.ok) {
+      return { success: true };
     }
-
-    return await downloadFile(result, filename);
+    return { success: false, error: 'Cannot download blob content' };
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -68,6 +75,7 @@ const MAX_CONCURRENT = 4;
 
 async function downloadAll(items) {
   let failed = 0;
+  const failedUrls = [];
 
   // Process in batches of MAX_CONCURRENT
   for (let i = 0; i < items.length; i += MAX_CONCURRENT) {
@@ -80,10 +88,14 @@ async function downloadAll(items) {
         return downloadFile(item.url, item.filename);
       })
     );
-    for (const r of results) {
-      if (r.status === 'rejected' || !r.value?.success) failed++;
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      if (r.status === 'rejected' || !r.value?.success) {
+        failed++;
+        failedUrls.push(batch[j].url);
+      }
     }
   }
 
-  return { success: true, total: items.length, failed };
+  return { success: true, total: items.length, failed, failedUrls };
 }
