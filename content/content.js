@@ -147,7 +147,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     // that el.shadowRoot cannot — available to Chrome extensions since Chrome 88
     const canOpenClosed = typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot;
     const getShadowRoot = canOpenClosed
-      ? (el) => chrome.dom.openOrClosedShadowRoot(el)
+      ? (el) => el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null
       : (el) => el.shadowRoot;
     const walk = (root) => {
       for (const el of root.querySelectorAll('*')) {
