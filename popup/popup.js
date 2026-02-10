@@ -503,6 +503,12 @@ let hoverTimer = null;
 let previewAbort = null;
 const HOVER_DELAY_MS = 350;
 
+function canPreviewUrl(url) {
+  // blob: and data: URLs are scoped to the page context — the popup can't load them.
+  // Embed URLs (YouTube etc.) are watch pages, not direct media.
+  return url && !url.startsWith('blob:') && !url.startsWith('data:');
+}
+
 function showPreview(mediaItem, itemEl) {
   previewAbort?.abort();
   previewAbort = new AbortController();
@@ -511,6 +517,7 @@ function showPreview(mediaItem, itemEl) {
   previewOverlay.replaceChildren();
 
   if (mediaItem.type === 'image') {
+    if (!canPreviewUrl(mediaItem.url)) return;
     const img = document.createElement('img');
     img.alt = 'Preview';
     img.decoding = 'async';
@@ -531,6 +538,7 @@ function showPreview(mediaItem, itemEl) {
       });
     }
   } else {
+    if (!canPreviewUrl(mediaItem.url) || mediaItem.embed) return;
     const video = document.createElement('video');
     video.src = mediaItem.url;
     video.autoplay = true;
