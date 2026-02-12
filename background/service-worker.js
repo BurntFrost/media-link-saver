@@ -24,9 +24,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 
   if (info.menuItemId === 'media-link-saver-show-in-popup') {
-    chrome.storage.session.set({ contextMenuFocusUrl: url }).then(() => {
-      chrome.action.openPopup?.().catch(() => {});
-    });
+    chrome.storage.session.set({ contextMenuFocusUrl: url });
+    // Must call openPopup synchronously while the context-menu click still counts as a user gesture
+    chrome.action.openPopup?.().catch(() => {});
   }
 });
 
