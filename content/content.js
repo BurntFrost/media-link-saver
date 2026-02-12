@@ -143,9 +143,10 @@ if (!globalThis.__mediaLinkSaverInjected) {
   // ── Scan scheduling (shared by MutationObservers and scroll handler) ──
 
   let scanQueued = false;
+  const IDLE_TIMEOUT_MS = 800;
   const scheduleIdle = globalThis.requestIdleCallback
-    ? (cb) => requestIdleCallback(cb, { timeout: 500 })
-    : (cb) => setTimeout(cb, 80);
+    ? (cb) => requestIdleCallback(cb, { timeout: IDLE_TIMEOUT_MS })
+    : (cb) => setTimeout(cb, 120);
 
   function queueRescan() {
     if (scanQueued) return;
@@ -154,6 +155,41 @@ if (!globalThis.__mediaLinkSaverInjected) {
       scanQueued = false;
       globalThis.__mediaLinkSaverMedia = extractMediaLinks();
     });
+  }
+
+  // Only queue a full rescan when mutations touch nodes that could affect media
+  const MEDIA_TAG_NAMES = new Set([
+    'IMG', 'VIDEO', 'AUDIO', 'SOURCE', 'PICTURE', 'A', 'IFRAME', 'CANVAS',
+    'LINK', 'META', 'NOSCRIPT', 'SCRIPT', 'STYLE',
+  ]);
+  const MEDIA_QUICK_SELECTOR = 'img, video, audio, source, picture, a[href], iframe, canvas, [data-src], [data-lazy], [data-original], [data-hi-res-src], [data-srcset], link[rel=preload], meta[property^="og:"], meta[name^="twitter:"]';
+
+  function nodeCouldAffectMedia(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const el = node;
+    if (MEDIA_TAG_NAMES.has(el.tagName)) return true;
+    if (LAZY_ATTRS.some((attr) => el.hasAttribute(attr))) return true;
+    if (el.hasAttribute('style') && /background/.test(el.getAttribute('style') || '')) return true;
+    try {
+      return el.querySelector(MEDIA_QUICK_SELECTOR) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  function mutationsTouchMedia(mutations) {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes') return true;
+      if (mutation.type === 'childList') {
+        for (const node of mutation.addedNodes) {
+          if (nodeCouldAffectMedia(node)) return true;
+        }
+        for (const node of mutation.removedNodes) {
+          if (nodeCouldAffectMedia(node)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   // ── Shadow DOM traversal (cached) ──
@@ -181,7 +217,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     try {
       new MutationObserver((mutations) => {
         checkMutationsForShadowRoots(mutations);
-        queueRescan();
+        if (mutationsTouchMedia(mutations)) queueRescan();
       }).observe(shadowRoot, {
         childList: true,
         subtree: true,
@@ -546,7 +582,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   const bodyObserver = new MutationObserver((mutations) => {
     checkMutationsForShadowRoots(mutations);
-    queueRescan();
+    if (mutationsTouchMedia(mutations)) queueRescan();
   });
 
   if (document.body) {

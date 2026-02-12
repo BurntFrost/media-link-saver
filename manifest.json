@@ -3,9 +3,10 @@
   "name": "Media Link Saver",
   "version": "1.1.0",
   "description": "Finds photos and videos on any page and lets you save them with one click.",
-  "permissions": ["activeTab", "scripting", "downloads"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage"],
+"options_ui": { "page": "options/options.html" },
   "action": {
-    "default_popup": "popup/popup.html",
+  "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

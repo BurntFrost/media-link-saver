@@ -13,7 +13,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.action === 'downloadAll') {
-    downloadAll(message.items).then(sendResponse);
+    downloadAll(message.items, message.maxConcurrent).then(sendResponse);
     return true;
   }
 });
@@ -71,15 +71,15 @@ async function downloadBlob(blobUrl, filename, tabId) {
 }
 
 // Download with concurrency limit to avoid flooding the browser
-const MAX_CONCURRENT = 4;
+const DEFAULT_MAX_CONCURRENT = 4;
 
-async function downloadAll(items) {
+async function downloadAll(items, maxConcurrent) {
+  const limit = Math.max(2, Math.min(8, maxConcurrent || DEFAULT_MAX_CONCURRENT));
   let failed = 0;
   const failedUrls = [];
 
-  // Process in batches of MAX_CONCURRENT
-  for (let i = 0; i < items.length; i += MAX_CONCURRENT) {
-    const batch = items.slice(i, i + MAX_CONCURRENT);
+  for (let i = 0; i < items.length; i += limit) {
+    const batch = items.slice(i, i + limit);
     const results = await Promise.allSettled(
       batch.map((item) => {
         if (item.blob && item.tabId) {
@@ -95,6 +95,12 @@ async function downloadAll(items) {
         failedUrls.push(batch[j].url);
       }
     }
+    const completed = Math.min(i + batch.length, items.length);
+    chrome.runtime.sendMessage({
+      action: 'downloadProgress',
+      completed,
+      total: items.length,
+    }).catch(() => { /* popup may be closed */ });
   }
 
   return { success: true, total: items.length, failed, failedUrls };

@@ -11,7 +11,18 @@ const h1 = document.createElement('h1');
 h1.textContent = 'Media Link Saver';
 const summary = document.createElement('div');
 summary.id = 'summary';
-header.append(h1, summary);
+summary.setAttribute('role', 'status');
+summary.setAttribute('aria-live', 'polite');
+const optionsLink = document.createElement('a');
+optionsLink.href = '#';
+optionsLink.className = 'header-options-link';
+optionsLink.textContent = 'Options';
+optionsLink.setAttribute('aria-label', 'Open extension options');
+optionsLink.addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.runtime.openOptionsPage?.();
+});
+header.append(h1, summary, optionsLink);
 
 // Controls
 const controls = document.createElement('div');
@@ -44,6 +55,21 @@ const saveAllBtn = document.createElement('button');
 saveAllBtn.id = 'save-all-btn';
 saveAllBtn.disabled = true;
 saveAllBtn.textContent = 'Save All';
+const copyUrlsBtn = document.createElement('button');
+copyUrlsBtn.id = 'copy-urls-btn';
+copyUrlsBtn.type = 'button';
+copyUrlsBtn.disabled = true;
+copyUrlsBtn.textContent = 'Copy URLs';
+const exportCsvBtn = document.createElement('button');
+exportCsvBtn.id = 'export-csv-btn';
+exportCsvBtn.type = 'button';
+exportCsvBtn.disabled = true;
+exportCsvBtn.textContent = 'Export CSV';
+const retryFailedBtn = document.createElement('button');
+retryFailedBtn.id = 'retry-failed-btn';
+retryFailedBtn.type = 'button';
+retryFailedBtn.className = 'hidden';
+retryFailedBtn.textContent = 'Retry failed';
 const sortSelect = document.createElement('select');
 sortSelect.id = 'sort-select';
 for (const [value, label] of [
@@ -59,7 +85,7 @@ for (const [value, label] of [
 
 const controlsRow = document.createElement('div');
 controlsRow.className = 'controls-row';
-controlsRow.append(filterRow, sortSelect, saveAllBtn);
+controlsRow.append(filterRow, sortSelect, exportCsvBtn, copyUrlsBtn, retryFailedBtn, saveAllBtn);
 controls.append(searchInput, controlsRow);
 
 // Media list
@@ -70,9 +96,14 @@ mediaListEl.id = 'media-list';
 const emptyStateEl = document.createElement('div');
 emptyStateEl.id = 'empty-state';
 emptyStateEl.className = 'hidden';
+emptyStateEl.setAttribute('role', 'status');
 const emptyP = document.createElement('p');
-emptyP.textContent = 'No media links found on this page.';
+emptyP.textContent = 'No media found on this page.';
 emptyStateEl.appendChild(emptyP);
+const emptyHint = document.createElement('p');
+emptyHint.className = 'empty-state-hint';
+emptyHint.textContent = 'Try scrolling or opening a page with images or videos.';
+emptyStateEl.appendChild(emptyHint);
 
 // Loading (skeleton cards)
 const loadingEl = document.createElement('div');
@@ -112,18 +143,42 @@ let searchQuery = '';
 let activeTabId = null;
 let activePageUrl = null;
 const savedUrls = new Set();
+let lastFailedItems = [];
+
+let options = { cacheTtlMinutes: 5, maxConcurrent: 4, excludePatterns: '' };
+function loadOptions() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['cacheTtlMinutes', 'maxConcurrent', 'excludePatterns'], (stored) => {
+      if (stored.cacheTtlMinutes != null) options.cacheTtlMinutes = stored.cacheTtlMinutes;
+      if (stored.maxConcurrent != null) options.maxConcurrent = stored.maxConcurrent;
+      if (stored.excludePatterns != null) options.excludePatterns = stored.excludePatterns || '';
+      resolve(options);
+    });
+  });
+}
 
 // ── Helpers ──
+
+// Strip/replace chars that break downloads on Windows, macOS, Linux
+const UNSAFE_FILENAME_RE = /[\s/\\:*?"<>|\x00-\x1f\x7f]/g;
+
+function sanitizeFilename(name) {
+  if (typeof name !== 'string' || !name.trim()) return 'file';
+  const replaced = name.replace(UNSAFE_FILENAME_RE, '_');
+  const trimmed = replaced.replace(/_+/g, '_').replace(/^_|_$/g, '').trim();
+  return trimmed || 'file';
+}
 
 function filenameFromUrl(url) {
   try {
     if (url.startsWith('data:')) {
       const mime = url.match(/^data:([^;,]+)/)?.[1] ?? '';
       const ext = mime.split('/')[1]?.split('+')[0] ?? 'bin';
-      return `data.${ext}`;
+      return sanitizeFilename(`data.${ext}`);
     }
     const pathname = new URL(url).pathname;
-    return decodeURIComponent(pathname.split('/').filter(Boolean).at(-1) ?? 'file').slice(0, 80);
+    const raw = decodeURIComponent(pathname.split('/').filter(Boolean).at(-1) ?? 'file').slice(0, 80);
+    return sanitizeFilename(raw) || 'file';
   } catch {
     return 'file';
   }
@@ -160,6 +215,13 @@ function getFiltered() {
     items = [...items].sort((a, b) => filenameFromUrl(a.url).localeCompare(filenameFromUrl(b.url)));
   } else if (currentSort === 'name-desc') {
     items = [...items].sort((a, b) => filenameFromUrl(b.url).localeCompare(filenameFromUrl(a.url)));
+  }
+
+  if (options.excludePatterns) {
+    const patterns = options.excludePatterns.split(/\n/).map((p) => p.trim().toLowerCase()).filter(Boolean);
+    if (patterns.length) {
+      items = items.filter((m) => !patterns.some((pat) => m.url.toLowerCase().includes(pat)));
+    }
   }
 
   return items;
@@ -238,11 +300,12 @@ function showToast(text, type = 'success') {
 
 // ── Build a single media-item DOM node ──
 
-function createMediaItem(item, index) {
+function createMediaItem(item, index, opts = {}) {
   const row = document.createElement('div');
-  row.className = 'media-item';
+  row.className = 'media-item' + (opts.virtual ? ' media-item-virtual' : '');
   row.dataset.index = index;
-  row.style.animationDelay = `${Math.min(index * 30, 300)}ms`;
+  row.dataset.url = item.url;
+  row.style.animationDelay = opts.virtual ? '' : `${Math.min(index * 30, 300)}ms`;
 
   // Thumbnail
   if (item.type === 'image') {
@@ -328,10 +391,26 @@ function createMediaItem(item, index) {
     row.appendChild(btn);
   }
 
+  // Open in new tab (only for non-blob, non-embed URLs)
+  if (!item.embed && !item.url.startsWith('blob:')) {
+    const openLink = document.createElement('button');
+    openLink.type = 'button';
+    openLink.className = 'open-tab-btn';
+    openLink.textContent = 'Open';
+    openLink.title = 'Open in new tab';
+    openLink.dataset.url = item.url;
+    row.appendChild(openLink);
+  }
+
   return row;
 }
 
 // ── Rendering ──
+
+const VIRTUAL_LIST_THRESHOLD = 500;
+const VIRTUAL_ROW_HEIGHT = 72;
+const VIRTUAL_VIEWPORT_MAX_HEIGHT = 360;
+const VIRTUAL_OVERSCAN = 6;
 
 function renderMedia(mediaItems, animate = false) {
   // Show/hide filter tabs based on available types
@@ -355,21 +434,18 @@ function renderMedia(mediaItems, animate = false) {
 
   if (filtered.length === 0) {
     mediaListEl.replaceChildren();
+    mediaListEl.classList.remove('virtual-list-active');
     emptyStateEl.classList.remove('hidden');
     saveAllBtn.disabled = true;
+    copyUrlsBtn.disabled = true;
+    exportCsvBtn.disabled = true;
     return;
   }
 
   emptyStateEl.classList.add('hidden');
   saveAllBtn.disabled = false;
-
-  const fragment = document.createDocumentFragment();
-  for (let i = 0; i < filtered.length; i++) {
-    fragment.appendChild(createMediaItem(filtered[i], i));
-  }
-
-  mediaListEl.classList.toggle('animate-items', animate);
-  mediaListEl.replaceChildren(fragment);
+  copyUrlsBtn.disabled = false;
+  exportCsvBtn.disabled = false;
 
   const images = mediaItems.filter((m) => m.type === 'image').length;
   const videos = mediaItems.filter((m) => m.type === 'video').length;
@@ -378,11 +454,86 @@ function renderMedia(mediaItems, animate = false) {
     ', ' + videos + ' video' + (videos !== 1 ? 's' : '');
   if (audios > 0) text += ', ' + audios + ' audio';
   summary.textContent = text;
+
+  if (filtered.length >= VIRTUAL_LIST_THRESHOLD) {
+    renderMediaVirtual(filtered, animate);
+  } else {
+    mediaListEl.classList.remove('virtual-list-active');
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < filtered.length; i++) {
+      fragment.appendChild(createMediaItem(filtered[i], i));
+    }
+    mediaListEl.classList.toggle('animate-items', animate);
+    mediaListEl.replaceChildren(fragment);
+  }
+}
+
+function renderMediaVirtual(filtered, animate) {
+  mediaListEl.classList.add('virtual-list-active');
+  let viewport = mediaListEl.querySelector('.virtual-list-viewport');
+  let track = viewport?.querySelector('.virtual-list-track');
+  let visible = viewport?.querySelector('.virtual-list-visible');
+
+  if (!viewport) {
+    viewport = document.createElement('div');
+    viewport.className = 'virtual-list-viewport';
+    track = document.createElement('div');
+    track.className = 'virtual-list-track';
+    visible = document.createElement('div');
+    visible.className = 'virtual-list-visible';
+    track.appendChild(visible);
+    viewport.appendChild(track);
+    mediaListEl.appendChild(viewport);
+
+    let scrollRaf = null;
+    viewport.addEventListener('scroll', () => {
+      if (scrollRaf) return;
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = null;
+        const state = viewport._virtualState;
+        if (!state) return;
+        updateVirtualVisible(viewport, state);
+      });
+    });
+  }
+
+  const totalHeight = filtered.length * VIRTUAL_ROW_HEIGHT;
+  track.style.height = totalHeight + 'px';
+  viewport._virtualState = { filtered, track, visible, totalHeight };
+
+  viewport.scrollTop = 0;
+  updateVirtualVisible(viewport, viewport._virtualState);
+}
+
+function updateVirtualVisible(viewport, state) {
+  const { filtered, track, visible } = state;
+  const scrollTop = viewport.scrollTop;
+  const viewportHeight = viewport.clientHeight;
+  const startIndex = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+  const visibleCount = Math.ceil(viewportHeight / VIRTUAL_ROW_HEIGHT) + VIRTUAL_OVERSCAN * 2;
+  const endIndex = Math.min(filtered.length, startIndex + visibleCount);
+
+  visible.style.top = startIndex * VIRTUAL_ROW_HEIGHT + 'px';
+  const fragment = document.createDocumentFragment();
+  for (let i = startIndex; i < endIndex; i++) {
+    fragment.appendChild(createMediaItem(filtered[i], i, { virtual: true }));
+  }
+  visible.replaceChildren(fragment);
 }
 
 // ── Event Handlers ──
 
 mediaListEl.addEventListener('click', async (e) => {
+  const openBtn = e.target.closest('.open-tab-btn');
+  if (openBtn) {
+    try {
+      chrome.tabs.create({ url: openBtn.dataset.url });
+    } catch {
+      showToast('Could not open tab', 'error');
+    }
+    return;
+  }
+
   // Copy URL for embed items
   const copyBtn = e.target.closest('.copy-btn');
   if (copyBtn) {
@@ -431,6 +582,13 @@ mediaListEl.addEventListener('click', async (e) => {
   }
 });
 
+// Live progress updates from service worker during Save All
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === 'downloadProgress' && saveAllBtn.classList.contains('saving')) {
+    saveAllBtn.textContent = `Saving ${message.completed}/${message.total}\u2026`;
+  }
+});
+
 saveAllBtn.addEventListener('click', async () => {
   const items = getFiltered()
     .filter((m) => !m.embed)
@@ -441,11 +599,14 @@ saveAllBtn.addEventListener('click', async () => {
       tabId: activeTabId,
     }));
 
-  saveAllBtn.textContent = 'Saving\u2026';
+  saveAllBtn.textContent = `Saving 0/${items.length}\u2026`;
   saveAllBtn.disabled = true;
+  copyUrlsBtn.disabled = true;
+  exportCsvBtn.disabled = true;
   saveAllBtn.classList.add('saving');
 
-  const response = await sendMsg({ action: 'downloadAll', items });
+  const maxConcurrent = Math.max(2, Math.min(8, options.maxConcurrent || 4));
+  const response = await sendMsg({ action: 'downloadAll', items, maxConcurrent });
   saveAllBtn.classList.remove('saving');
 
   if (response?.success) {
@@ -462,17 +623,30 @@ saveAllBtn.addEventListener('click', async () => {
     }
 
     if (response.failed > 0) {
-      // Re-enable so user can retry the failed downloads
+      const failedSet = new Set(response.failedUrls ?? []);
+      lastFailedItems = items.filter((it) => failedSet.has(it.url));
+      retryFailedBtn.classList.remove('hidden');
       saveAllBtn.textContent = 'Save All';
       saveAllBtn.disabled = false;
+      copyUrlsBtn.disabled = false;
+      exportCsvBtn.disabled = false;
       showToast(`Saved ${saved}/${response.total} \u2014 ${response.failed} failed`, 'error');
     } else {
+      lastFailedItems = [];
+      retryFailedBtn.classList.add('hidden');
       saveAllBtn.textContent = `Saved All ${saved}`;
+      saveAllBtn.disabled = false;
+      copyUrlsBtn.disabled = false;
+      exportCsvBtn.disabled = false;
       showToast(`Saved all ${response.total} files`, 'success');
     }
   } else {
+    lastFailedItems = [];
+    retryFailedBtn.classList.add('hidden');
     saveAllBtn.textContent = 'Save All';
     saveAllBtn.disabled = false;
+    copyUrlsBtn.disabled = false;
+    exportCsvBtn.disabled = false;
     showToast('Save All failed', 'error');
   }
 });
@@ -494,6 +668,104 @@ sortSelect.addEventListener('change', () => {
 searchInput.addEventListener('input', () => {
   searchQuery = searchInput.value.trim();
   renderMedia(allMedia);
+});
+
+copyUrlsBtn.addEventListener('click', async () => {
+  const items = getFiltered().filter((m) => !m.embed);
+  if (items.length === 0) {
+    showToast('No URLs to copy', 'info');
+    return;
+  }
+  const text = items.map((m) => m.url).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`Copied ${items.length} URL${items.length !== 1 ? 's' : ''} to clipboard`, 'success');
+  } catch {
+    showToast('Failed to copy', 'error');
+  }
+});
+
+function escapeCsvCell(str) {
+  const s = String(str ?? '');
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+exportCsvBtn.addEventListener('click', async () => {
+  const items = getFiltered().filter((m) => !m.embed);
+  if (items.length === 0) {
+    showToast('No items to export', 'info');
+    return;
+  }
+  const headerRow = 'filename,url,type';
+  const rows = items.map((m) =>
+    [escapeCsvCell(filenameFromUrl(m.url)), escapeCsvCell(m.url), escapeCsvCell(m.type)].join(',')
+  );
+  const csv = [headerRow, ...rows].join('\n');
+  try {
+    await navigator.clipboard.writeText(csv);
+    showToast(`Copied ${items.length} rows as CSV`, 'success');
+  } catch {
+    showToast('Failed to copy CSV', 'error');
+  }
+});
+
+retryFailedBtn.addEventListener('click', async () => {
+  if (lastFailedItems.length === 0) return;
+  const toRetry = lastFailedItems.slice();
+  retryFailedBtn.classList.add('hidden');
+  saveAllBtn.textContent = `Saving 0/${toRetry.length}\u2026`;
+  saveAllBtn.disabled = true;
+  copyUrlsBtn.disabled = true;
+  exportCsvBtn.disabled = true;
+  saveAllBtn.classList.add('saving');
+  const maxConcurrent = Math.max(2, Math.min(8, options.maxConcurrent || 4));
+  const response = await sendMsg({ action: 'downloadAll', items: toRetry, maxConcurrent });
+  saveAllBtn.classList.remove('saving');
+  if (response?.success && response.failed === 0) {
+    lastFailedItems = [];
+    const urls = toRetry.map((x) => x.url);
+    for (const btn of mediaListEl.querySelectorAll('.save-btn')) {
+      if (urls.includes(btn.dataset.url)) {
+        btn.textContent = 'Saved';
+        btn.classList.add('saved');
+        savedUrls.add(btn.dataset.url);
+      }
+    }
+    showToast(`Retried: saved all ${toRetry.length}`, 'success');
+  } else if (response?.success && response.failed > 0) {
+    const failedSet = new Set(response.failedUrls ?? []);
+    lastFailedItems = toRetry.filter((it) => failedSet.has(it.url));
+    retryFailedBtn.classList.remove('hidden');
+    showToast(`Retry: ${response.total - response.failed}/${response.total} saved, ${response.failed} failed`, 'error');
+  } else {
+    lastFailedItems = toRetry.slice();
+    retryFailedBtn.classList.remove('hidden');
+    showToast('Retry failed', 'error');
+  }
+  saveAllBtn.textContent = 'Save All';
+  saveAllBtn.disabled = false;
+  copyUrlsBtn.disabled = false;
+  exportCsvBtn.disabled = false;
+});
+
+// ── Keyboard shortcuts ──
+document.addEventListener('keydown', (e) => {
+  const target = e.target;
+  const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'f') {
+      e.preventDefault();
+      searchInput.focus();
+      return;
+    }
+    if (e.key === 'Enter' && !isInput && saveAllBtn.classList.contains('saving') === false) {
+      if (!saveAllBtn.disabled) {
+        e.preventDefault();
+        saveAllBtn.click();
+      }
+    }
+  }
 });
 
 // ── Hover Preview ──
@@ -553,8 +825,12 @@ function showPreview(mediaItem, itemEl) {
     });
   }
 
-  itemEl.classList.add('previewing');
-  activePreviewItem = itemEl;
+  if (itemEl.isConnected) {
+    itemEl.classList.add('previewing');
+    activePreviewItem = itemEl;
+  } else {
+    activePreviewItem = null;
+  }
 }
 
 // Persistent listener — clean up preview content after fade-out transition.
@@ -595,7 +871,7 @@ mediaListEl.addEventListener('mouseenter', (e) => {
   if (!item) return;
 
   // Dismiss preview when entering action button
-  if (e.target.closest('.save-btn') || e.target.closest('.copy-btn')) {
+  if (e.target.closest('.save-btn') || e.target.closest('.copy-btn') || e.target.closest('.open-tab-btn')) {
     cancelPendingPreview();
     hidePreview();
     return;
@@ -603,8 +879,10 @@ mediaListEl.addEventListener('mouseenter', (e) => {
 
   cancelPendingPreview();
   hoverTimer = setTimeout(() => {
-    const idx = parseInt(item.dataset.index, 10);
-    const mediaItem = getFiltered()[idx];
+    const url = item.dataset.url;
+    if (!url) return;
+    if (!item.isConnected) return;
+    const mediaItem = getFiltered().find((m) => m.url === url);
     if (mediaItem) showPreview(mediaItem, item);
   }, HOVER_DELAY_MS);
 }, true);
@@ -615,7 +893,7 @@ mediaListEl.addEventListener('mouseleave', (e) => {
 
   // Only dismiss when truly leaving the row (relatedTarget is outside this item)
   const goingTo = e.relatedTarget;
-  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn') && !goingTo.closest('.copy-btn')) return;
+  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn') && !goingTo.closest('.copy-btn') && !goingTo.closest('.open-tab-btn')) return;
 
   cancelPendingPreview();
   hidePreview();
@@ -625,7 +903,11 @@ mediaListEl.addEventListener('mouseleave', (e) => {
 
 const CACHE_DB_NAME = 'MediaLinkSaverDB';
 const CACHE_STORE = 'mediaCache';
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000; // evict entries older than 24h
+
+function getCacheTtlMs() {
+  return (options.cacheTtlMinutes || 5) * 60 * 1000;
+}
 
 function canonicalUrl(url) {
   try {
@@ -646,6 +928,32 @@ function openCacheDB() {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+async function evictStaleCacheEntries() {
+  try {
+    const db = await openCacheDB();
+    const tx = db.transaction(CACHE_STORE, 'readwrite');
+    const store = tx.objectStore(CACHE_STORE);
+    const cutoff = Date.now() - MAX_CACHE_AGE_MS;
+    return new Promise((resolve) => {
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          if (cursor.value.timestamp < cutoff) {
+            cursor.delete();
+          }
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      req.onerror = () => resolve();
+    });
+  } catch {
+    // Non-critical
+  }
 }
 
 async function getCachedMedia(pageUrl) {
@@ -716,8 +1024,12 @@ async function init() {
 
     activePageUrl = canonicalUrl(tab.url);
     const pageUrl = activePageUrl;
+
+    await loadOptions();
+    await evictStaleCacheEntries();
     const cached = await getCachedMedia(pageUrl);
-    const isFresh = cached && (Date.now() - cached.timestamp < CACHE_TTL_MS);
+    const cacheTtlMs = getCacheTtlMs();
+    const isFresh = cached && (Date.now() - cached.timestamp < cacheTtlMs);
 
     if (cached) {
       // Show cached results immediately
@@ -748,22 +1060,38 @@ async function init() {
       summary.textContent = 'Could not scan this page';
     }
 
-    // Poll for updates while popup is open (catches scroll / lazy-load / infinite scroll)
-    const POLL_MS = 1500;
-    const pollId = setInterval(async () => {
-      if (!activeTabId) return;
-      const fresh = await liveScan(activeTabId);
-      if (!fresh) return;
-      const deduped = deduplicateMedia(fresh);
-      if (!mediaEqual(allMedia, deduped)) {
-        allMedia = deduped;
-        if (activePageUrl) setCachedMedia(activePageUrl, fresh);
-        renderMedia(allMedia);
-      }
-    }, POLL_MS);
+    // Adaptive polling: 1.5s for first 30s (catch quick lazy-load), then 2.5s
+    const POLL_FAST_MS = 1500;
+    const POLL_SLOW_MS = 2500;
+    const POLL_FAST_DURATION_MS = 30 * 1000;
+    const pollStart = Date.now();
+    let pollTimeoutId = null;
 
-    // Clean up polling when popup closes
-    window.addEventListener('unload', () => clearInterval(pollId));
+    function schedulePoll() {
+      const elapsed = Date.now() - pollStart;
+      const delay = elapsed < POLL_FAST_DURATION_MS ? POLL_FAST_MS : POLL_SLOW_MS;
+      pollTimeoutId = setTimeout(async () => {
+        if (!activeTabId) {
+          schedulePoll();
+          return;
+        }
+        const fresh = await liveScan(activeTabId);
+        if (fresh) {
+          const deduped = deduplicateMedia(fresh);
+          if (!mediaEqual(allMedia, deduped)) {
+            allMedia = deduped;
+            if (activePageUrl) await setCachedMedia(activePageUrl, fresh);
+            renderMedia(allMedia);
+          }
+        }
+        schedulePoll();
+      }, delay);
+    }
+    schedulePoll();
+
+    window.addEventListener('unload', () => {
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
+    });
   } catch {
     loadingEl.classList.add('hidden');
     if (!allMedia.length) emptyStateEl.classList.remove('hidden');
