@@ -362,6 +362,7 @@ function createMediaItem(item, index, opts = {}) {
   }
 
   const urlLabel = document.createElement('span');
+  urlLabel.className = 'media-url';
   urlLabel.textContent = truncateUrl(item.url);
   urlLabel.title = item.url;
 
@@ -1016,6 +1017,51 @@ function mediaEqual(a, b) {
   return true;
 }
 
+function findMediaIndexByUrl(filtered, url) {
+  const norm = normalizeForDedup(url);
+  for (let i = 0; i < filtered.length; i++) {
+    if (filtered[i].url === url || normalizeForDedup(filtered[i].url) === norm) return i;
+  }
+  return -1;
+}
+
+async function tryFocusContextMenuImage() {
+  let url;
+  try {
+    const result = await chrome.storage.session.get('contextMenuFocusUrl');
+    url = result.contextMenuFocusUrl;
+    if (!url) return;
+    await chrome.storage.session.remove('contextMenuFocusUrl');
+  } catch {
+    return;
+  }
+  const filtered = getFiltered();
+  const focusIndex = findMediaIndexByUrl(filtered, url);
+  if (focusIndex < 0) return;
+
+  const viewport = mediaListEl.querySelector('.virtual-list-viewport');
+  if (viewport) {
+    viewport.scrollTop = Math.max(0, focusIndex * VIRTUAL_ROW_HEIGHT - 20);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const row = viewport.querySelector('.media-item[data-index="' + focusIndex + '"]');
+        if (row) {
+          row.classList.add('media-item-context-focus');
+          setTimeout(() => row.classList.remove('media-item-context-focus'), 2500);
+        }
+      });
+    });
+  } else {
+    const rows = mediaListEl.querySelectorAll('.media-item');
+    const row = rows[focusIndex];
+    if (row) {
+      row.classList.add('media-item-context-focus');
+      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      setTimeout(() => row.classList.remove('media-item-context-focus'), 2500);
+    }
+  }
+}
+
 async function init() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1036,6 +1082,7 @@ async function init() {
       loadingEl.classList.add('hidden');
       allMedia = deduplicateMedia(cached.media);
       renderMedia(allMedia, true);
+      await tryFocusContextMenuImage();
     }
 
     // Inject the content script into ALL frames (idempotent — won't double-inject)
@@ -1055,6 +1102,7 @@ async function init() {
         allMedia = deduplicateMedia(freshMedia);
         renderMedia(allMedia, true);
       }
+      await tryFocusContextMenuImage();
     } else if (!cached) {
       emptyStateEl.classList.remove('hidden');
       summary.textContent = 'Could not scan this page';

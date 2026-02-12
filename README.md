@@ -16,6 +16,8 @@
 - **Search** — instantly filter results by filename or URL
 - **Sort** — order by name (A–Z or Z–A)
 - **Hover preview** — see a full-size image or auto-playing video preview on hover
+- **Truncated URLs** — long media URLs in the list show with ellipsis; full URL on hover
+- **Context menu** — right-click any image for "Open image in new tab" or "Show in Media Link Saver"; the latter opens the popup and scrolls to that image with a brief highlight
 - **Save individually or in bulk** — download a single file or hit Save All for everything matching your current filter. Partial failures re-enable Save All so you can retry, and only the items that actually succeeded are marked as saved
 - **Blob URL resolution** — handles JavaScript-generated blob URLs by fetching the blob in the page context and downloading via `<a download>`, bypassing Chrome's data URL size limit so videos of any size work
 - **Instant popup** — IndexedDB caching (5-minute TTL) displays cached results immediately while a fresh scan runs in the background
@@ -92,6 +94,8 @@ Three-component message-passing design:
 | `activeTab` | Access page content only when the user clicks the extension icon |
 | `scripting` | Inject content script on demand (no blanket `<all_urls>`) |
 | `downloads` | Save files to the downloads folder |
+| `storage` | Session storage for context-menu "Show in Media Link Saver" focus; IndexedDB cache uses the same permission |
+| `contextMenus` | Right-click image menu: "Open image in new tab" and "Show in Media Link Saver" |
 
 ## Project Structure
 

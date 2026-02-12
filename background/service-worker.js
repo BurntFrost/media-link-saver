@@ -1,6 +1,35 @@
 // Media Link Saver — Background Service Worker
 // Handles download requests with concurrency control via Promise.allSettled.
 
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'media-link-saver-open-image',
+    title: 'Open image in new tab',
+    contexts: ['image'],
+  });
+  chrome.contextMenus.create({
+    id: 'media-link-saver-show-in-popup',
+    title: 'Show in Media Link Saver',
+    contexts: ['image'],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const url = info.srcUrl;
+  if (!url) return;
+
+  if (info.menuItemId === 'media-link-saver-open-image') {
+    chrome.tabs.create({ url });
+    return;
+  }
+
+  if (info.menuItemId === 'media-link-saver-show-in-popup') {
+    chrome.storage.session.set({ contextMenuFocusUrl: url }).then(() => {
+      chrome.action.openPopup?.().catch(() => {});
+    });
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === 'download') {
     downloadFile(message.url, message.filename).then(sendResponse);
