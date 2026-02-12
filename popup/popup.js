@@ -1031,7 +1031,7 @@ async function tryFocusContextMenuImage() {
     const result = await chrome.storage.session.get('contextMenuFocusUrl');
     url = result.contextMenuFocusUrl;
     if (!url) return;
-    await chrome.storage.session.remove('contextMenuFocusUrl');
+    // Do not remove here: init() may call us again after re-render with fresh media.
   } catch {
     return;
   }
@@ -1140,6 +1140,9 @@ async function init() {
     window.addEventListener('unload', () => {
       if (pollTimeoutId) clearTimeout(pollTimeoutId);
     });
+
+    // Clear context-menu focus URL once we're done so the next open doesn't reuse it.
+    await chrome.storage.session.remove('contextMenuFocusUrl');
   } catch {
     loadingEl.classList.add('hidden');
     if (!allMedia.length) emptyStateEl.classList.remove('hidden');
