@@ -1,0 +1,13 @@
+# Build artifacts
+dist/
+*.zip
+
+# Claude Code
+.claude/
+
+# Documentation (dev-only)
+docs/
+
+# OS files
+.DS_Store
+Thumbs.db

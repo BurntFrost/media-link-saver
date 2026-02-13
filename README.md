@@ -28,6 +28,16 @@
 
 ## Install
 
+### Download (recommended)
+
+1. Download the latest `.zip` from [Releases](https://github.com/BurntFrost/media-link-saver/releases)
+2. Unzip the download
+3. Open Chrome → `chrome://extensions/`
+4. Enable **Developer mode** (top-right toggle)
+5. Click **Load unpacked** and select the unzipped folder
+
+### From Source
+
 1. Clone this repo:
    ```sh
    git clone https://github.com/BurntFrost/media-link-saver.git
@@ -35,7 +45,8 @@
 2. Open Chrome → `chrome://extensions/`
 3. Enable **Developer mode** (top-right toggle)
 4. Click **Load unpacked** and select the cloned folder
-5. Visit any webpage and click the extension icon in the toolbar
+
+Visit any webpage and click the extension icon in the toolbar. 🎉
 
 ## Architecture
 
@@ -102,6 +113,7 @@ Three-component message-passing design:
 ```
 media-link-saver/
 ├── manifest.json
+├── LICENSE
 ├── background/
 │   └── service-worker.js    # Download orchestration
 ├── content/
@@ -110,10 +122,15 @@ media-link-saver/
 │   ├── popup.html            # Minimal shell
 │   ├── popup.js              # UI logic (100% DOM APIs)
 │   └── popup.css             # Styles
-└── icons/
-    ├── icon16.png
-    ├── icon48.png
-    └── icon128.png
+├── options/
+│   ├── options.html
+│   └── options.js
+├── icons/
+│   ├── icon16.png
+│   ├── icon48.png
+│   └── icon128.png
+└── scripts/
+    └── package.sh            # Build zip for distribution
 ```
 
 ## License
