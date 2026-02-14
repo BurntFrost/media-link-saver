@@ -24,8 +24,10 @@ if (!globalThis.__mediaLinkSaverInjected) {
     'data-src', 'data-video-url', 'data-hd-url', 'data-file-url',
     'data-sd-url', 'data-mobile-url', 'data-hd-file-url',
     'data-video-src', 'data-content-url', 'data-mp4', 'data-webm',
+    'data-thumbnail', 'data-thumb', 'data-thumb-url', 'data-poster',
+    'data-image-src', 'data-image-url', 'data-high-res-src',
   ];
-  const LAZY_ATTRS = ['data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src'];
+  const LAZY_ATTRS = ['data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src', 'data-thumbnail', 'data-poster'];
 
   const TRACKING_RE = /\/pixel[./?]|\/tr[./?]|1x1|spacer/i;
   const BG_URL_RE = /url\(["']?(.+?)["']?\)/;
@@ -103,6 +105,10 @@ if (!globalThis.__mediaLinkSaverInjected) {
     { re: /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/, url: (id) => `https://www.dailymotion.com/video/${id}` },
   ];
 
+  const YT_ID_RE = /(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/g;
+
+  const INLINE_IMAGE_RE = /https?:\/\/[^\s"'<>{}|\\]{1,2048}?\.(?:jpg|jpeg|png|webp|avif)/gi;
+
   const JSON_LD_MEDIA_KEYS = new Set([
     'image', 'thumbnailUrl', 'contentUrl', 'embedUrl',
     'logo', 'photo', 'video', 'audio',
@@ -162,7 +168,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     'IMG', 'VIDEO', 'AUDIO', 'SOURCE', 'PICTURE', 'A', 'IFRAME', 'CANVAS',
     'LINK', 'META', 'NOSCRIPT', 'SCRIPT', 'STYLE',
   ]);
-  const MEDIA_QUICK_SELECTOR = 'img, video, audio, source, picture, a[href], iframe, canvas, [data-src], [data-lazy], [data-original], [data-hi-res-src], [data-srcset], link[rel=preload], meta[property^="og:"], meta[name^="twitter:"]';
+  const MEDIA_QUICK_SELECTOR = 'img, video, audio, source, picture, a[href], iframe, canvas, [data-src], [data-lazy], [data-original], [data-hi-res-src], [data-srcset], [data-thumbnail], [data-poster], link[rel=preload], meta[property^="og:"], meta[name^="twitter:"], [itemprop]';
 
   function nodeCouldAffectMedia(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
@@ -211,6 +217,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
   const OBSERVED_ATTRS = [
     'src', 'srcset', 'href', 'poster', 'style',
     'data-src', 'data-lazy', 'data-original', 'data-lazy-src', 'data-hi-res-src',
+    'data-thumbnail', 'data-poster',
   ];
 
   function observeShadowRoot(shadowRoot) {
@@ -516,6 +523,34 @@ if (!globalThis.__mediaLinkSaverInjected) {
       } catch { /* skip malformed JSON */ }
     }
 
+    // Schema.org microdata (itemprop) — used heavily by news sites (CNN, BBC, NYT)
+    for (const el of deep('[itemprop="image"], [itemprop="thumbnailUrl"], [itemprop="contentUrl"]')) {
+      const url = el.getAttribute('content') || el.getAttribute('href') || el.getAttribute('src');
+      if (!url) continue;
+      try {
+        const resolved = new URL(url, location.href).href;
+        const type = classifyUrl(resolved) ?? 'image';
+        add(resolved, type, 'microdata');
+      } catch { /* skip */ }
+    }
+
+    // YouTube thumbnail construction from video IDs in links and iframes
+    const ytIds = new Set();
+    for (const a of deep('a[href]')) {
+      YT_ID_RE.lastIndex = 0;
+      const m = YT_ID_RE.exec(a.href);
+      if (m) ytIds.add(m[1]);
+    }
+    for (const iframe of deep('iframe[src]')) {
+      YT_ID_RE.lastIndex = 0;
+      const m = YT_ID_RE.exec(iframe.src);
+      if (m) ytIds.add(m[1]);
+    }
+    for (const id of ytIds) {
+      add(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`, 'image', 'yt-thumb');
+      add(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, 'image', 'yt-thumb');
+    }
+
     // Iframe video embeds (YouTube, Vimeo, Dailymotion)
     for (const iframe of deep('iframe[src]')) {
       const src = iframe.src;
@@ -544,20 +579,32 @@ if (!globalThis.__mediaLinkSaverInjected) {
       } catch { /* tainted canvas — skip */ }
     }
 
-    // Inline script video URL extraction — catches SPAs that embed video
-    // data in JS (Nuxt __NUXT__, Next __NEXT_DATA__, Redux stores, etc.)
+    // Inline script URL extraction — catches SPAs that embed media URLs
+    // in JS (YouTube ytInitialData, Nuxt __NUXT__, Next __NEXT_DATA__, Redux stores, etc.)
     const INLINE_VIDEO_RE = /https?:\/\/[^\s"'<>{}]{1,2048}?\.(?:mp4|webm|mov|mkv|m4v|m3u8|mpd)/gi;
     for (const script of document.querySelectorAll('script:not([src])')) {
       const text = script.textContent;
       if (!text || text.length > 500_000) continue;
+
+      // Video URLs
       INLINE_VIDEO_RE.lastIndex = 0;
       let match;
       while ((match = INLINE_VIDEO_RE.exec(text)) !== null) {
         try {
-          // Clean JSON-escaped slashes (e.g. https:\/\/...)
           const url = new URL(match[0].replaceAll('\\/', '/')).href;
           const type = classifyUrl(url);
           if (type) add(url, type, 'script-data');
+        } catch { /* skip invalid URLs */ }
+      }
+
+      // Image URLs (YouTube thumbnails, Next.js images, etc.)
+      INLINE_IMAGE_RE.lastIndex = 0;
+      while ((match = INLINE_IMAGE_RE.exec(text)) !== null) {
+        try {
+          const url = new URL(match[0].replaceAll('\\/', '/')).href;
+          if (!ASSET_RE.test(url) && !TRACKING_RE.test(url)) {
+            add(url, 'image', 'script-data');
+          }
         } catch { /* skip invalid URLs */ }
       }
     }

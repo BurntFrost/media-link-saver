@@ -17,6 +17,7 @@ const optionsLink = document.createElement('a');
 optionsLink.href = '#';
 optionsLink.className = 'header-options-link';
 optionsLink.textContent = 'Options';
+optionsLink.title = 'Extension settings (cache, concurrency, exclude patterns)';
 optionsLink.setAttribute('aria-label', 'Open extension options');
 optionsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -41,7 +42,12 @@ const filterBtns = filters.map(({ key, label }) => {
   const btn = document.createElement('button');
   btn.className = 'filter-btn' + (key === 'all' ? ' active' : '');
   btn.dataset.filter = key;
-  btn.textContent = label;
+  const labelSpan = document.createTextNode(label);
+  const countSpan = document.createElement('span');
+  countSpan.className = 'filter-count';
+  countSpan.textContent = '0';
+  btn.append(labelSpan, countSpan);
+  btn._countEl = countSpan;
   return btn;
 });
 filterRow.append(...filterBtns);
@@ -50,43 +56,67 @@ const searchInput = document.createElement('input');
 searchInput.id = 'search-input';
 searchInput.type = 'text';
 searchInput.placeholder = 'Search media\u2026';
+searchInput.title = 'Filter by filename or URL (Ctrl+F)';
 
 const saveAllBtn = document.createElement('button');
 saveAllBtn.id = 'save-all-btn';
 saveAllBtn.disabled = true;
 saveAllBtn.textContent = 'Save All';
+saveAllBtn.title = 'Download all visible media files';
 const copyUrlsBtn = document.createElement('button');
 copyUrlsBtn.id = 'copy-urls-btn';
 copyUrlsBtn.type = 'button';
 copyUrlsBtn.disabled = true;
 copyUrlsBtn.textContent = 'Copy URLs';
+copyUrlsBtn.title = 'Copy all visible URLs to clipboard';
 const exportCsvBtn = document.createElement('button');
 exportCsvBtn.id = 'export-csv-btn';
 exportCsvBtn.type = 'button';
 exportCsvBtn.disabled = true;
 exportCsvBtn.textContent = 'Export CSV';
+exportCsvBtn.title = 'Copy media list as CSV to clipboard';
 const retryFailedBtn = document.createElement('button');
 retryFailedBtn.id = 'retry-failed-btn';
 retryFailedBtn.type = 'button';
 retryFailedBtn.className = 'hidden';
 retryFailedBtn.textContent = 'Retry failed';
-const sortSelect = document.createElement('select');
-sortSelect.id = 'sort-select';
-for (const [value, label] of [
-  ['default', 'Default'],
-  ['name-asc', 'Name A\u2013Z'],
-  ['name-desc', 'Name Z\u2013A'],
-]) {
-  const opt = document.createElement('option');
-  opt.value = value;
-  opt.textContent = label;
-  sortSelect.appendChild(opt);
-}
+retryFailedBtn.title = 'Retry downloading files that failed';
+const SORT_MODES = [
+  { key: 'default', icon: '\u2195\uFE0F', title: 'Default order' },       // ↕️
+  { key: 'name-asc', icon: '\u2B06\uFE0F', title: 'Sort A\u2013Z' },     // ⬆️
+  { key: 'name-desc', icon: '\u2B07\uFE0F', title: 'Sort Z\u2013A' },    // ⬇️
+];
+let sortIndex = 0;
+const sortBtn = document.createElement('button');
+sortBtn.id = 'sort-btn';
+sortBtn.type = 'button';
+sortBtn.textContent = SORT_MODES[0].icon;
+sortBtn.title = SORT_MODES[0].title;
+
+// View toggle (list / grid)
+const viewToggle = document.createElement('div');
+viewToggle.className = 'view-toggle';
+const listViewBtn = document.createElement('button');
+listViewBtn.className = 'view-toggle-btn active';
+listViewBtn.type = 'button';
+listViewBtn.title = 'List view';
+listViewBtn.textContent = '\u2630'; // ☰ hamburger
+const gridViewBtn = document.createElement('button');
+gridViewBtn.className = 'view-toggle-btn';
+gridViewBtn.type = 'button';
+gridViewBtn.title = 'Grid view';
+gridViewBtn.textContent = '\u25A6'; // ▦ grid
+viewToggle.append(listViewBtn, gridViewBtn, sortBtn);
 
 const controlsRow = document.createElement('div');
 controlsRow.className = 'controls-row';
-controlsRow.append(filterRow, sortSelect, exportCsvBtn, copyUrlsBtn, retryFailedBtn, saveAllBtn);
-controls.append(searchInput, controlsRow);
+controlsRow.append(filterRow, viewToggle);
+
+const actionsRow = document.createElement('div');
+actionsRow.className = 'controls-row';
+actionsRow.append(copyUrlsBtn, exportCsvBtn, retryFailedBtn, saveAllBtn);
+
+controls.append(searchInput, controlsRow, actionsRow);
 
 // Media list
 const mediaListEl = document.createElement('div');
@@ -97,6 +127,10 @@ const emptyStateEl = document.createElement('div');
 emptyStateEl.id = 'empty-state';
 emptyStateEl.className = 'hidden';
 emptyStateEl.setAttribute('role', 'status');
+const emptyIcon = document.createElement('span');
+emptyIcon.className = 'empty-state-icon';
+emptyIcon.textContent = '\uD83D\uDDBC\uFE0F'; // 🖼️
+emptyStateEl.appendChild(emptyIcon);
 const emptyP = document.createElement('p');
 emptyP.textContent = 'No media found on this page.';
 emptyStateEl.appendChild(emptyP);
@@ -140,6 +174,7 @@ let allMedia = [];
 let currentFilter = 'all';
 let currentSort = 'default';
 let searchQuery = '';
+let currentView = 'list';
 let activeTabId = null;
 let activePageUrl = null;
 const savedUrls = new Set();
@@ -298,6 +333,48 @@ function showToast(text, type = 'success') {
   toastTimer = setTimeout(() => { toastEl.className = ''; }, 2500);
 }
 
+// ── Source label mapping ──
+
+const SOURCE_LABELS = {
+  'link': 'link',
+  'img': 'img',
+  'img-srcset': 'srcset',
+  'lazy': 'lazy',
+  'lazy-srcset': 'lazy',
+  'video': 'video',
+  'video-poster': 'poster',
+  'video-derived': 'derived',
+  'source': 'source',
+  'audio': 'audio',
+  'picture-source': 'picture',
+  'css-bg': 'css',
+  'meta': 'og/meta',
+  'noscript': 'noscript',
+  'preload': 'preload',
+  'json-ld': 'json-ld',
+  'embed': 'embed',
+  'canvas': 'canvas',
+  'script-data': 'script',
+  'resource-timing': 'timing',
+  'microdata': 'schema',
+  'yt-thumb': 'youtube',
+};
+
+function makeCheckSvg() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'check-icon');
+  svg.setAttribute('viewBox', '0 0 14 14');
+  svg.setAttribute('fill', 'none');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M2.5 7.5L5.5 10.5L11.5 4');
+  path.setAttribute('stroke', '#fff');
+  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(path);
+  return svg;
+}
+
 // ── Build a single media-item DOM node ──
 
 function createMediaItem(item, index, opts = {}) {
@@ -367,6 +444,15 @@ function createMediaItem(item, index, opts = {}) {
   urlLabel.title = item.url;
 
   meta.append(urlLabel);
+
+  // Source pill
+  if (item.source) {
+    const srcPill = document.createElement('span');
+    srcPill.className = 'media-source-pill';
+    srcPill.textContent = SOURCE_LABELS[item.source] ?? item.source;
+    meta.append(srcPill);
+  }
+
   info.append(fnEl, meta);
   row.appendChild(info);
 
@@ -375,6 +461,7 @@ function createMediaItem(item, index, opts = {}) {
     const btn = document.createElement('button');
     btn.className = 'copy-btn';
     btn.textContent = 'Copy';
+    btn.title = 'Copy URL to clipboard';
     btn.dataset.url = item.url;
     row.appendChild(btn);
   } else {
@@ -382,10 +469,12 @@ function createMediaItem(item, index, opts = {}) {
     btn.className = 'save-btn';
     btn.dataset.url = item.url;
     btn.dataset.filename = filename;
+    btn.title = 'Download this file';
     if (item.blob) btn.dataset.blob = 'true';
     if (savedUrls.has(item.url)) {
-      btn.textContent = 'Saved';
+      btn.replaceChildren(makeCheckSvg(), document.createTextNode('Saved'));
       btn.classList.add('saved');
+      btn.title = 'Already downloaded';
     } else {
       btn.textContent = 'Save';
     }
@@ -414,15 +503,16 @@ const VIRTUAL_VIEWPORT_MAX_HEIGHT = 360;
 const VIRTUAL_OVERSCAN = 6;
 
 function renderMedia(mediaItems, animate = false) {
-  // Show/hide filter tabs based on available types
-  const typeCounts = { image: 0, video: 0, audio: 0 };
+  // Show/hide filter tabs based on available types and update counts
+  const typeCounts = { all: 0, image: 0, video: 0, audio: 0 };
   for (const item of allMedia) {
+    typeCounts.all++;
     if (item.type in typeCounts) typeCounts[item.type]++;
   }
   for (const btn of filterBtns) {
     const key = btn.dataset.filter;
-    if (key === 'all') continue;
-    btn.classList.toggle('hidden', typeCounts[key] === 0);
+    if (key !== 'all') btn.classList.toggle('hidden', typeCounts[key] === 0);
+    btn._countEl.textContent = typeCounts[key] ?? 0;
   }
   // Reset to 'all' if active filter has no results
   if (currentFilter !== 'all' && typeCounts[currentFilter] === 0) {
@@ -460,12 +550,14 @@ function renderMedia(mediaItems, animate = false) {
     renderMediaVirtual(filtered, animate);
   } else {
     mediaListEl.classList.remove('virtual-list-active');
-    const fragment = document.createDocumentFragment();
+    const isGrid = currentView === 'grid';
+    const container = isGrid ? document.createElement('div') : document.createDocumentFragment();
+    if (isGrid) container.className = 'media-grid';
     for (let i = 0; i < filtered.length; i++) {
-      fragment.appendChild(createMediaItem(filtered[i], i));
+      container.appendChild(createMediaItem(filtered[i], i));
     }
     mediaListEl.classList.toggle('animate-items', animate);
-    mediaListEl.replaceChildren(fragment);
+    mediaListEl.replaceChildren(container);
   }
 }
 
@@ -572,7 +664,7 @@ mediaListEl.addEventListener('click', async (e) => {
       });
 
   if (response?.success) {
-    btn.textContent = 'Saved';
+    btn.replaceChildren(makeCheckSvg(), document.createTextNode('Saved'));
     btn.classList.add('saved');
     savedUrls.add(btn.dataset.url);
   } else {
@@ -617,7 +709,7 @@ saveAllBtn.addEventListener('click', async () => {
     // Only mark buttons as "Saved" for items that actually succeeded
     for (const btn of mediaListEl.querySelectorAll('.save-btn:not(.saved)')) {
       if (!failedSet.has(btn.dataset.url)) {
-        btn.textContent = 'Saved';
+        btn.replaceChildren(makeCheckSvg(), document.createTextNode('Saved'));
         btn.classList.add('saved');
         savedUrls.add(btn.dataset.url);
       }
@@ -661,8 +753,29 @@ for (const btn of filterBtns) {
   });
 }
 
-sortSelect.addEventListener('change', () => {
-  currentSort = sortSelect.value;
+sortBtn.addEventListener('click', () => {
+  sortIndex = (sortIndex + 1) % SORT_MODES.length;
+  const mode = SORT_MODES[sortIndex];
+  currentSort = mode.key;
+  sortBtn.textContent = mode.icon;
+  sortBtn.title = mode.title;
+  sortBtn.classList.toggle('active', mode.key !== 'default');
+  renderMedia(allMedia, true);
+});
+
+listViewBtn.addEventListener('click', () => {
+  if (currentView === 'list') return;
+  currentView = 'list';
+  listViewBtn.classList.add('active');
+  gridViewBtn.classList.remove('active');
+  renderMedia(allMedia, true);
+});
+
+gridViewBtn.addEventListener('click', () => {
+  if (currentView === 'grid') return;
+  currentView = 'grid';
+  gridViewBtn.classList.add('active');
+  listViewBtn.classList.remove('active');
   renderMedia(allMedia, true);
 });
 
@@ -728,7 +841,7 @@ retryFailedBtn.addEventListener('click', async () => {
     const urls = toRetry.map((x) => x.url);
     for (const btn of mediaListEl.querySelectorAll('.save-btn')) {
       if (urls.includes(btn.dataset.url)) {
-        btn.textContent = 'Saved';
+        btn.replaceChildren(makeCheckSvg(), document.createTextNode('Saved'));
         btn.classList.add('saved');
         savedUrls.add(btn.dataset.url);
       }
