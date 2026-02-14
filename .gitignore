@@ -2,6 +2,10 @@
 dist/
 *.zip
 
+# Node / test tooling
+node_modules/
+coverage/
+
 # Claude Code
 .claude/
 
