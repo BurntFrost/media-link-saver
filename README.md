@@ -5,7 +5,7 @@
 ![Chrome](https://img.shields.io/badge/Chrome-Manifest_V3-4285F4?logo=googlechrome&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![LOC](https://img.shields.io/badge/LOC-~2%2C900-informational)
+![LOC](https://img.shields.io/badge/LOC-~3%2C800-informational)
 
 ## Features
 
@@ -15,14 +15,19 @@
 - **Live sync** — MutationObserver keeps the media list updated as you scroll, with idle-time rescans for SPAs and infinite-scroll pages. Each shadow root gets its own observer
 - **Smart filtering** — automatically excludes favicons, avatars, sprites, tracking pixels, placeholders, UI chrome, and other non-content assets (80×80 px minimum)
 - **Resolution-aware dedup** — same image at different CDN sizes collapses to a single entry, keeping the highest resolution variant
+- **Dimension & file size extraction** — reads natural width/height from image and video elements and file size from the Resource Timing API, displayed as badges on each item
 
 ### 🖼️ Popup UI
 - **Grid & list views** — toggle between compact list and thumbnail grid layout
 - **Filter by type** — All, Images, Videos, Audio — with live count badges that auto-hide empty categories
 - **Search** — instantly filter results by filename or URL
 - **Sort** — cycle through default, A–Z, and Z–A with a single click
+- **Dimension filters** — minimum width/height inputs to hide small images (in collapsible Filters panel)
+- **Per-item selection** — toggle Select mode to cherry-pick individual items with checkboxes, then Save Selected or Select All / Clear
+- **Video thumbnails** — video items show a first-frame preview loaded via `<video preload="metadata">`, with emoji fallback for blob/embed URLs
 - **Source pills** — each item shows where it was found (e.g. "youtube", "og/meta", "json-ld", "css bg")
 - **Hover preview** — full-size image or auto-playing video preview on hover
+- **Collapsible Filters panel** — advanced controls (dimension filters, format conversion, ZIP toggle, copy/export, selection helpers) are tucked behind a Filters button to keep the default view clean; open/closed state is remembered
 - **Animated save feedback** — buttons transform to a green checkmark on success
 - **Empty state** — friendly animated hint when no media is found
 - **Glassmorphism header** — frosted backdrop-blur with sticky positioning
@@ -32,6 +37,9 @@
 
 ### 💾 Downloads
 - **Save individually or in bulk** — download one file or Save All for everything matching your current filter
+- **Save Selected** — download only the items you've checked in Select mode
+- **Format conversion** — convert images to JPG or PNG on download (WebP → JPG/PNG via canvas in MAIN world); non-convertible items fall back to original format
+- **ZIP packaging** — toggle ZIP mode to bundle all downloads into a single `.zip` file, built entirely in-browser with no external libraries
 - **Live progress** — Save All button shows "Saving X/Y…" count during batch download
 - **Retry failed** — partial failures surface a Retry button for just the items that didn't complete
 - **Blob URL resolution** — fetches JavaScript-generated blobs in page context via `<a download>`, bypassing Chrome's data URL size limit
@@ -83,18 +91,20 @@ Three-component message-passing design:
 └────┬────┘   media[]     └────────────────┘
      │
      │  download / downloadAll / downloadBlob
+     │  downloadConverted / downloadZip
      ▾
-┌──────────────┐
-│Service Worker│
-│ (downloads)  │
-└──────────────┘
+┌─────────────────────────┐
+│    Service Worker        │
+│ (downloads, conversion, │
+│  ZIP packaging)         │
+└─────────────────────────┘
 ```
 
 | Component | Files | Role |
 |-----------|-------|------|
-| **Popup** | `popup/popup.html` `popup.js` `popup.css` | UI layer — filters, search, sort, grid/list toggle, hover preview, download buttons. Built entirely via DOM APIs (zero innerHTML) |
-| **Content Script** | `content/content.js` | Injected on demand. Deep-scans DOM for media across 15+ sources, watches for mutations on document and shadow roots |
-| **Service Worker** | `background/service-worker.js` | Download orchestration with configurable concurrency. Blob URLs resolved via MAIN world script injection. Context menu registration |
+| **Popup** | `popup/popup.html` `popup.js` `popup.css` | UI layer — filters, search, sort, grid/list toggle, dimension filters, selection checkboxes, format conversion & ZIP controls, hover preview, download buttons. Built entirely via DOM APIs (zero innerHTML) |
+| **Content Script** | `content/content.js` | Injected on demand. Deep-scans DOM for media across 15+ sources, extracts dimensions and file sizes, watches for mutations on document and shadow roots |
+| **Service Worker** | `background/service-worker.js` | Download orchestration with configurable concurrency. Blob URLs resolved via MAIN world script injection. Format conversion (canvas-based) and ZIP packaging via MAIN world. Context menu registration |
 | **Options** | `options/options.html` `options.js` `options.css` | User-configurable cache TTL, download concurrency, and URL exclude patterns |
 
 ## Media Detection Sources
