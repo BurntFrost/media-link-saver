@@ -16,7 +16,7 @@ summary.setAttribute('aria-live', 'polite');
 const optionsLink = document.createElement('a');
 optionsLink.href = '#';
 optionsLink.className = 'header-options-link';
-optionsLink.textContent = 'Options';
+optionsLink.textContent = '\u2699\uFE0F'; // ⚙️
 optionsLink.title = 'Extension settings (cache, concurrency, exclude patterns)';
 optionsLink.setAttribute('aria-label', 'Open extension options');
 optionsLink.addEventListener('click', (e) => {
@@ -28,6 +28,20 @@ header.append(h1, summary, optionsLink);
 // Controls
 const controls = document.createElement('div');
 controls.id = 'controls';
+
+// Dimension filter inputs (moved into advanced panel)
+const minWInput = document.createElement('input');
+minWInput.type = 'number';
+minWInput.min = '0';
+minWInput.placeholder = 'Min W';
+minWInput.id = 'min-width-input';
+minWInput.title = 'Minimum width (px)';
+const minHInput = document.createElement('input');
+minHInput.type = 'number';
+minHInput.min = '0';
+minHInput.placeholder = 'Min H';
+minHInput.id = 'min-height-input';
+minHInput.title = 'Minimum height (px)';
 
 const filterRow = document.createElement('div');
 filterRow.className = 'filter-row';
@@ -58,6 +72,33 @@ searchInput.type = 'text';
 searchInput.placeholder = 'Search media\u2026';
 searchInput.title = 'Filter by filename or URL (Ctrl+F)';
 
+// Convert format select
+const convertSelect = document.createElement('select');
+convertSelect.id = 'convert-select';
+for (const [val, label] of [
+  ['original', 'Original'],
+  ['jpg', 'JPG'],
+  ['png', 'PNG'],
+]) {
+  const opt = document.createElement('option');
+  opt.value = val; opt.textContent = label;
+  convertSelect.appendChild(opt);
+}
+
+// ZIP toggle
+const zipToggle = document.createElement('button');
+zipToggle.id = 'zip-toggle-btn';
+zipToggle.type = 'button';
+zipToggle.textContent = 'ZIP';
+zipToggle.title = 'Download as a single ZIP file';
+
+// Filters (advanced) toggle
+const advancedBtn = document.createElement('button');
+advancedBtn.id = 'advanced-btn';
+advancedBtn.type = 'button';
+advancedBtn.textContent = 'Filters';
+advancedBtn.title = 'Show filters and advanced options';
+
 const saveAllBtn = document.createElement('button');
 saveAllBtn.id = 'save-all-btn';
 saveAllBtn.disabled = true;
@@ -81,16 +122,47 @@ retryFailedBtn.type = 'button';
 retryFailedBtn.className = 'hidden';
 retryFailedBtn.textContent = 'Retry failed';
 retryFailedBtn.title = 'Retry downloading files that failed';
+function makeSortSvg(mode) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'sort-icon');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  if (mode === 'default') {
+    // Up arrow
+    const up = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    up.setAttribute('d', 'M8 3L5 6h6L8 3z');
+    up.setAttribute('fill', 'currentColor');
+    svg.appendChild(up);
+    // Down arrow
+    const down = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    down.setAttribute('d', 'M8 13l3-3H5l3 3z');
+    down.setAttribute('fill', 'currentColor');
+    svg.appendChild(down);
+  } else if (mode === 'name-asc') {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', 'M8 3l-4 5h8L8 3z');
+    p.setAttribute('fill', 'currentColor');
+    svg.appendChild(p);
+  } else {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', 'M8 13l4-5H4l4 5z');
+    p.setAttribute('fill', 'currentColor');
+    svg.appendChild(p);
+  }
+  return svg;
+}
 const SORT_MODES = [
-  { key: 'default', icon: '\u2195\uFE0F', title: 'Default order' },       // ↕️
-  { key: 'name-asc', icon: '\u2B06\uFE0F', title: 'Sort A\u2013Z' },     // ⬆️
-  { key: 'name-desc', icon: '\u2B07\uFE0F', title: 'Sort Z\u2013A' },    // ⬇️
+  { key: 'default', title: 'Default order' },
+  { key: 'name-asc', title: 'Sort A\u2013Z' },
+  { key: 'name-desc', title: 'Sort Z\u2013A' },
 ];
 let sortIndex = 0;
 const sortBtn = document.createElement('button');
 sortBtn.id = 'sort-btn';
 sortBtn.type = 'button';
-sortBtn.textContent = SORT_MODES[0].icon;
+sortBtn.replaceChildren(makeSortSvg(SORT_MODES[0].key));
 sortBtn.title = SORT_MODES[0].title;
 
 // View toggle (list / grid)
@@ -110,12 +182,48 @@ viewToggle.append(listViewBtn, gridViewBtn, sortBtn);
 
 const controlsRow = document.createElement('div');
 controlsRow.className = 'controls-row';
-controlsRow.append(filterRow, viewToggle);
+controlsRow.append(filterRow);
 
 const actionsRow = document.createElement('div');
 actionsRow.className = 'controls-row';
-actionsRow.append(copyUrlsBtn, exportCsvBtn, retryFailedBtn, saveAllBtn);
+// Selection mode controls
+const selectModeBtn = document.createElement('button');
+selectModeBtn.id = 'select-mode-btn';
+selectModeBtn.type = 'button';
+selectModeBtn.textContent = 'Select';
+selectModeBtn.title = 'Toggle selection mode';
+const selectAllBtn = document.createElement('button');
+selectAllBtn.id = 'select-all-btn';
+selectAllBtn.type = 'button';
+selectAllBtn.textContent = 'Select All';
+selectAllBtn.title = 'Select all visible';
+selectAllBtn.className = 'hidden';
+const clearSelBtn = document.createElement('button');
+clearSelBtn.id = 'clear-sel-btn';
+clearSelBtn.type = 'button';
+clearSelBtn.textContent = 'Clear';
+clearSelBtn.title = 'Clear selection';
+clearSelBtn.className = 'hidden';
 
+// Simplified toolbar row — sort lives inside viewToggle for visual grouping
+viewToggle.append(listViewBtn, gridViewBtn, sortBtn);
+actionsRow.append(selectModeBtn, advancedBtn, viewToggle, retryFailedBtn, saveAllBtn);
+
+// Collapsible advanced panel
+const advancedPanel = document.createElement('div');
+advancedPanel.id = 'advanced-panel';
+advancedPanel.className = 'hidden';
+
+// Advanced content: dimension inputs, conversion/zip, copy/export, selection helpers
+const advRow1 = document.createElement('div');
+advRow1.className = 'adv-row';
+advRow1.append(minWInput, minHInput);
+
+const advRow3 = document.createElement('div');
+advRow3.className = 'adv-row';
+advRow3.append(convertSelect, zipToggle, copyUrlsBtn, exportCsvBtn, selectAllBtn, clearSelBtn);
+
+advancedPanel.append(advRow1, advRow3);
 controls.append(searchInput, controlsRow, actionsRow);
 
 // Media list
@@ -166,6 +274,9 @@ previewOverlay.id = 'preview-overlay';
 const toastEl = document.createElement('div');
 toastEl.id = 'toast';
 
+// Move dimension inputs into advanced panel (see below) instead of top-level
+// controls.prepend(dimRow);
+controls.append(advancedPanel);
 app.append(header, controls, mediaListEl, emptyStateEl, loadingEl, previewOverlay, toastEl);
 
 // ── State ──
@@ -175,6 +286,12 @@ let currentFilter = 'all';
 let currentSort = 'default';
 let searchQuery = '';
 let currentView = 'list';
+let minWidth = 0;
+let minHeight = 0;
+let selectMode = false;
+const selectedUrls = new Set();
+let convertFormat = 'original';
+let zipMode = false;
 let activeTabId = null;
 let activePageUrl = null;
 const savedUrls = new Set();
@@ -233,10 +350,33 @@ function truncateUrl(url, max = 50) {
   }
 }
 
+function passesDimFilter(item) {
+  if (!minWidth && !minHeight) return true;
+  const w = item.width || 0;
+  const h = item.height || 0;
+  if (minWidth && w && w < minWidth) return false;
+  if (minHeight && h && h < minHeight) return false;
+  // If dimensions unknown, keep item (user can still inspect)
+  return true;
+}
+
+async function loadUiPrefs() {
+  try {
+    const stored = await new Promise((resolve) => chrome.storage.sync.get(['uiAdvancedOpen'], resolve));
+    const open = !!stored.uiAdvancedOpen;
+    advancedPanel.classList.toggle('hidden', !open);
+    advancedBtn.classList.toggle('active', open);
+    advancedBtn.title = open ? 'Hide filters and advanced options' : 'Show filters and advanced options';
+  } catch { /* ignore */ }
+}
+
 function getFiltered() {
   let items = currentFilter === 'all'
     ? allMedia
     : allMedia.filter((m) => m.type === currentFilter);
+
+  // Dimension filters
+  items = items.filter(passesDimFilter);
 
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -377,6 +517,15 @@ function makeCheckSvg() {
 
 // ── Build a single media-item DOM node ──
 
+function formatFileSize(bytes) {
+  const b = Number(bytes || 0);
+  if (!b) return '';
+  const units = ['B','KB','MB','GB'];
+  let i = 0, n = b;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
 function createMediaItem(item, index, opts = {}) {
   const row = document.createElement('div');
   row.className = 'media-item' + (opts.virtual ? ' media-item-virtual' : '');
@@ -399,6 +548,20 @@ function createMediaItem(item, index, opts = {}) {
       img.replaceWith(ph);
     }, { once: true });
     row.appendChild(img);
+  } else if (item.type === 'video' && !item.blob && !item.embed && !item.url.startsWith('blob:') && !item.url.startsWith('data:')) {
+    const vid = document.createElement('video');
+    vid.className = 'media-thumb';
+    vid.preload = 'metadata';
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.src = item.url;
+    vid.addEventListener('error', () => {
+      const ph = document.createElement('div');
+      ph.className = 'media-thumb placeholder';
+      ph.textContent = '\uD83C\uDFA5';
+      vid.replaceWith(ph);
+    }, { once: true });
+    row.appendChild(vid);
   } else {
     const ph = document.createElement('div');
     ph.className = 'media-thumb placeholder';
@@ -420,11 +583,38 @@ function createMediaItem(item, index, opts = {}) {
   const meta = document.createElement('div');
   meta.className = 'media-meta';
 
+  // Selection checkbox (appears in select mode)
+  if (selectMode) {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'select-checkbox';
+    cb.checked = selectedUrls.has(item.url);
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedUrls.add(item.url); else selectedUrls.delete(item.url);
+      updateSelectionUi();
+    });
+    row.prepend(cb);
+  }
+
   const badge = document.createElement('span');
   badge.className = 'media-type-badge ' + item.type;
   badge.textContent = item.type;
 
   meta.append(badge);
+
+  // Dimension + size badges
+  if (item.width && item.height) {
+    const dim = document.createElement('span');
+    dim.className = 'media-dim-badge';
+    dim.textContent = `${item.width}×${item.height}`;
+    meta.append(dim);
+  }
+  if (item.fileSize) {
+    const size = document.createElement('span');
+    size.className = 'media-size-badge';
+    size.textContent = formatFileSize(item.fileSize);
+    meta.append(size);
+  }
 
   const extraBadges = [
     item.blob && 'blob',
@@ -650,18 +840,16 @@ mediaListEl.addEventListener('click', async (e) => {
   btn.textContent = '\u2026';
 
   const isBlob = btn.dataset.blob === 'true';
-  const response = isBlob
-    ? await sendMsg({
-        action: 'downloadBlob',
-        blobUrl: btn.dataset.url,
-        filename: btn.dataset.filename,
-        tabId: activeTabId,
-      })
-    : await sendMsg({
-        action: 'download',
-        url: btn.dataset.url,
-        filename: btn.dataset.filename,
-      });
+  const url = btn.dataset.url;
+  const filename = btn.dataset.filename;
+  let response;
+  if (!isBlob && convertFormat !== 'original' && !url.startsWith('blob:')) {
+    response = await sendMsg({ action: 'downloadConverted', url, filename, format: convertFormat, tabId: activeTabId });
+  } else if (isBlob) {
+    response = await sendMsg({ action: 'downloadBlob', blobUrl: url, filename, tabId: activeTabId });
+  } else {
+    response = await sendMsg({ action: 'download', url, filename });
+  }
 
   if (response?.success) {
     btn.replaceChildren(makeCheckSvg(), document.createTextNode('Saved'));
@@ -682,15 +870,28 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-saveAllBtn.addEventListener('click', async () => {
-  const items = getFiltered()
+function collectDownloadItems() {
+  const base = getFiltered()
     .filter((m) => !m.embed)
-    .map((m) => ({
-      url: m.url,
-      filename: filenameFromUrl(m.url),
-      blob: !!m.blob,
-      tabId: activeTabId,
-    }));
+    .filter((m) => (selectedUrls.size ? selectedUrls.has(m.url) : true))
+    .map((m) => ({ url: m.url, filename: filenameFromUrl(m.url), blob: !!m.blob, tabId: activeTabId, type: m.type }));
+  return base;
+}
+
+function updateSelectionUi() {
+  const count = selectedUrls.size;
+  if (selectMode) {
+    selectAllBtn.classList.remove('hidden');
+    clearSelBtn.classList.remove('hidden');
+  } else {
+    selectAllBtn.classList.add('hidden');
+    clearSelBtn.classList.add('hidden');
+  }
+  saveAllBtn.textContent = count > 0 ? `Save Selected (${count})` : (zipMode ? 'Save All (ZIP)' : 'Save All');
+}
+
+saveAllBtn.addEventListener('click', async () => {
+  const items = collectDownloadItems();
 
   saveAllBtn.textContent = `Saving 0/${items.length}\u2026`;
   saveAllBtn.disabled = true;
@@ -698,8 +899,33 @@ saveAllBtn.addEventListener('click', async () => {
   exportCsvBtn.disabled = true;
   saveAllBtn.classList.add('saving');
 
-  const maxConcurrent = Math.max(2, Math.min(8, options.maxConcurrent || 4));
-  const response = await sendMsg({ action: 'downloadAll', items, maxConcurrent });
+  let response;
+  if (zipMode) {
+    response = await sendMsg({ action: 'downloadZip', items: items, tabId: activeTabId, convertFormat });
+  } else if (convertFormat !== 'original') {
+    // Sequential per-item flow to honor conversion without ZIP
+    let failed = 0;
+    const failedUrls = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      let r;
+      try {
+        if (it.type === 'image' && !it.blob && !it.url.startsWith('blob:')) {
+          r = await sendMsg({ action: 'downloadConverted', url: it.url, filename: it.filename, format: convertFormat, tabId: activeTabId });
+        } else if (it.blob) {
+          r = await sendMsg({ action: 'downloadBlob', blobUrl: it.url, filename: it.filename, tabId: activeTabId });
+        } else {
+          r = await sendMsg({ action: 'download', url: it.url, filename: it.filename });
+        }
+      } catch { r = null; }
+      if (!r?.success) { failed++; failedUrls.push(it.url); }
+      saveAllBtn.textContent = `Saving ${i + 1}/${items.length}\u2026`;
+    }
+    response = { success: true, total: items.length, failed, failedUrls };
+  } else {
+    const maxConcurrent = Math.max(2, Math.min(8, options.maxConcurrent || 4));
+    response = await sendMsg({ action: 'downloadAll', items, maxConcurrent });
+  }
   saveAllBtn.classList.remove('saving');
 
   if (response?.success) {
@@ -744,6 +970,53 @@ saveAllBtn.addEventListener('click', async () => {
   }
 });
 
+minWInput.addEventListener('input', () => {
+  minWidth = Math.max(0, parseInt(minWInput.value || '0', 10));
+  renderMedia(allMedia);
+});
+minHInput.addEventListener('input', () => {
+  minHeight = Math.max(0, parseInt(minHInput.value || '0', 10));
+  renderMedia(allMedia);
+});
+
+convertSelect.addEventListener('change', () => {
+  convertFormat = convertSelect.value;
+});
+
+zipToggle.addEventListener('click', () => {
+  zipMode = !zipMode;
+  zipToggle.classList.toggle('active', zipMode);
+  updateSelectionUi();
+});
+
+advancedBtn.addEventListener('click', () => {
+  const isHidden = advancedPanel.classList.toggle('hidden');
+  const open = !isHidden;
+  advancedBtn.classList.toggle('active', open);
+  advancedBtn.title = open ? 'Hide filters and advanced options' : 'Show filters and advanced options';
+  try { chrome.storage.sync.set({ uiAdvancedOpen: open }); } catch {}
+});
+
+selectModeBtn.addEventListener('click', () => {
+  selectMode = !selectMode;
+  if (!selectMode) selectedUrls.clear();
+  updateSelectionUi();
+  renderMedia(allMedia, true);
+});
+
+selectAllBtn.addEventListener('click', () => {
+  const filtered = getFiltered();
+  for (const it of filtered) selectedUrls.add(it.url);
+  updateSelectionUi();
+  renderMedia(allMedia);
+});
+
+clearSelBtn.addEventListener('click', () => {
+  selectedUrls.clear();
+  updateSelectionUi();
+  renderMedia(allMedia);
+});
+
 for (const btn of filterBtns) {
   btn.addEventListener('click', () => {
     for (const b of filterBtns) b.classList.remove('active');
@@ -757,7 +1030,7 @@ sortBtn.addEventListener('click', () => {
   sortIndex = (sortIndex + 1) % SORT_MODES.length;
   const mode = SORT_MODES[sortIndex];
   currentSort = mode.key;
-  sortBtn.textContent = mode.icon;
+  sortBtn.replaceChildren(makeSortSvg(mode.key));
   sortBtn.title = mode.title;
   sortBtn.classList.toggle('active', mode.key !== 'default');
   renderMedia(allMedia, true);
@@ -1184,6 +1457,7 @@ async function init() {
     activePageUrl = canonicalUrl(tab.url);
     const pageUrl = activePageUrl;
 
+    await loadUiPrefs();
     await loadOptions();
     await evictStaleCacheEntries();
     const cached = await getCachedMedia(pageUrl);

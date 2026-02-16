@@ -349,13 +349,25 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   // ── Main extraction ──
 
+  function buildSizeMap() {
+    const map = new Map();
+    try {
+      for (const entry of performance.getEntriesByType('resource')) {
+        const size = entry.decodedBodySize || entry.transferSize;
+        if (size > 0) map.set(entry.name, size);
+      }
+    } catch { /* Resource Timing unavailable */ }
+    return map;
+  }
+
   function extractMediaLinks() {
     const seen = new Set();
     const media = [];
     const roots = collectRoots();
     const deep = (sel) => deepQuerySelectorAll(roots, sel);
+    const sizeMap = buildSizeMap();
 
-    const add = (url, type, source, blob = false) => {
+    const add = (url, type, source, blob = false, extraProps = null) => {
       if (media.length >= MAX_MEDIA_ITEMS) return;
       if (!url || seen.has(url)) return;
       if (url.startsWith('javascript:')) return;
@@ -369,6 +381,9 @@ if (!globalThis.__mediaLinkSaverInjected) {
       const item = { url, type, source };
       if (blob) item.blob = true;
       if (isStreamUrl(url)) item.stream = true;
+      if (extraProps) Object.assign(item, extraProps);
+      const fileSize = sizeMap.get(url);
+      if (fileSize) item.fileSize = fileSize;
       media.push(item);
     };
 
@@ -397,10 +412,11 @@ if (!globalThis.__mediaLinkSaverInjected) {
       const ih = img.naturalHeight;
       if (iw > 0 && ih > 0 && iw < MIN_CONTENT_DIM && ih < MIN_CONTENT_DIM) continue;
 
+      const dims = (iw > 0 && ih > 0) ? { width: iw, height: ih } : null;
       const imgSrc = img.currentSrc || img.src;
       if (imgSrc) {
         if (imgSrc.startsWith('blob:')) addBlob(img, imgSrc, 'image', 'img');
-        else add(imgSrc, 'image', 'img');
+        else add(imgSrc, 'image', 'img', false, dims);
       }
       if (img.srcset) {
         for (const url of parseSrcset(img.srcset)) add(url, 'image', 'img-srcset');
@@ -422,6 +438,9 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
     // Videos
     for (const video of deep('video')) {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const vDims = (vw > 0 && vh > 0) ? { width: vw, height: vh } : null;
       if (video.src) {
         if (video.src.startsWith('blob:')) {
           addBlob(video, video.src, 'video', 'video');
@@ -433,7 +452,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
             }
           }
         } else {
-          add(video.src, 'video', 'video');
+          add(video.src, 'video', 'video', false, vDims);
         }
       }
       if (video.poster) add(video.poster, 'image', 'video-poster');
