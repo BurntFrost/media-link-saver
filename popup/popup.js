@@ -23,7 +23,54 @@ optionsLink.addEventListener('click', (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage?.();
 });
-header.append(h1, summary, optionsLink);
+
+// Side panel toggle (only shown in popup context, not when already in side panel)
+const sidePanelBtn = document.createElement('a');
+sidePanelBtn.href = '#';
+sidePanelBtn.className = 'header-sidepanel-link';
+sidePanelBtn.title = 'Open in side panel';
+sidePanelBtn.setAttribute('aria-label', 'Open in side panel');
+const sidePanelSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+sidePanelSvg.setAttribute('viewBox', '0 0 16 16');
+sidePanelSvg.setAttribute('width', '16');
+sidePanelSvg.setAttribute('height', '16');
+sidePanelSvg.setAttribute('fill', 'none');
+const spRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+spRect.setAttribute('x', '1.5');
+spRect.setAttribute('y', '2.5');
+spRect.setAttribute('width', '13');
+spRect.setAttribute('height', '11');
+spRect.setAttribute('rx', '2');
+spRect.setAttribute('stroke', 'currentColor');
+spRect.setAttribute('stroke-width', '1.5');
+const spLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+spLine.setAttribute('x1', '10');
+spLine.setAttribute('y1', '2.5');
+spLine.setAttribute('x2', '10');
+spLine.setAttribute('y2', '13.5');
+spLine.setAttribute('stroke', 'currentColor');
+spLine.setAttribute('stroke-width', '1.5');
+sidePanelSvg.append(spRect, spLine);
+sidePanelBtn.appendChild(sidePanelSvg);
+sidePanelBtn.addEventListener('click', async (e) => {
+  e.preventDefault();
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id && chrome.sidePanel?.open) {
+      await chrome.sidePanel.open({ tabId: tab.id });
+      window.close(); // close popup after opening side panel
+    } else {
+      showToast('Side panel not supported', 'error');
+    }
+  } catch {
+    showToast('Could not open side panel', 'error');
+  }
+});
+// Hide the side panel button if we're already inside the side panel
+const isSidePanel = window.location.pathname.includes('sidepanel');
+if (isSidePanel) sidePanelBtn.classList.add('hidden');
+
+header.append(h1, summary, sidePanelBtn, optionsLink);
 
 // Controls
 const controls = document.createElement('div');
@@ -182,7 +229,7 @@ viewToggle.append(listViewBtn, gridViewBtn, sortBtn);
 
 const controlsRow = document.createElement('div');
 controlsRow.className = 'controls-row';
-controlsRow.append(filterRow);
+controlsRow.append(filterRow, viewToggle);
 
 const actionsRow = document.createElement('div');
 actionsRow.className = 'controls-row';
@@ -205,23 +252,140 @@ clearSelBtn.textContent = 'Clear';
 clearSelBtn.title = 'Clear selection';
 clearSelBtn.className = 'hidden';
 
-// Simplified toolbar row — sort lives inside viewToggle for visual grouping
+// Overflow menu (hamburger) — houses ZIP, Copy URLs, Export CSV
+const overflowBtn = document.createElement('button');
+overflowBtn.id = 'overflow-btn';
+overflowBtn.type = 'button';
+overflowBtn.title = 'More actions';
+overflowBtn.setAttribute('aria-label', 'More actions');
+overflowBtn.setAttribute('aria-haspopup', 'true');
+const overflowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+overflowSvg.setAttribute('viewBox', '0 0 16 16');
+overflowSvg.setAttribute('width', '16');
+overflowSvg.setAttribute('height', '16');
+overflowSvg.setAttribute('fill', 'currentColor');
+for (const cy of [3, 8, 13]) {
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', '8');
+  c.setAttribute('cy', String(cy));
+  c.setAttribute('r', '1.5');
+  overflowSvg.appendChild(c);
+}
+overflowBtn.appendChild(overflowSvg);
+
+const overflowMenu = document.createElement('div');
+overflowMenu.id = 'overflow-menu';
+overflowMenu.className = 'hidden';
+
+// Build menu items
+function makeOverflowItem(label, icon, btn) {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'overflow-menu-item';
+  item.textContent = `${icon} ${label}`;
+  item.addEventListener('click', () => {
+    btn.click();
+    dismissOverflowMenu();
+  });
+  return item;
+}
+
+// Save All menu item — special: shows count when selecting
+const saveAllMenuItem = document.createElement('button');
+saveAllMenuItem.type = 'button';
+saveAllMenuItem.className = 'overflow-menu-item overflow-menu-save';
+saveAllMenuItem.textContent = '\uD83D\uDCBE Save All';
+saveAllMenuItem.addEventListener('click', () => {
+  saveAllBtn.click();
+  dismissOverflowMenu();
+});
+
+overflowMenu.append(
+  saveAllMenuItem,
+  makeOverflowItem('Save as ZIP', '\uD83D\uDDDC\uFE0F', zipToggle),
+  makeOverflowItem('Copy URLs', '\uD83D\uDD17', copyUrlsBtn),
+  makeOverflowItem('Export CSV', '\uD83D\uDCCB', exportCsvBtn),
+);
+
+// ZIP active indicator — sync with toggle state
+const zipMenuItem = overflowMenu.children[1];
+function updateZipMenuItem() {
+  zipMenuItem.classList.toggle('active', zipMode);
+  zipMenuItem.textContent = zipMode ? '\u2705 ZIP mode ON' : '\uD83D\uDDDC\uFE0F Save as ZIP';
+}
+
+// Keep Save All menu item label in sync
+function updateSaveAllMenuItem() {
+  const count = selectedUrls.size;
+  if (saveAllBtn.classList.contains('saving')) {
+    saveAllMenuItem.textContent = saveAllBtn.textContent;
+    saveAllMenuItem.disabled = true;
+  } else if (saveAllBtn.disabled) {
+    saveAllMenuItem.textContent = '\uD83D\uDCBE Save All';
+    saveAllMenuItem.disabled = true;
+  } else if (count > 0) {
+    saveAllMenuItem.textContent = `\uD83D\uDCBE Save Selected (${count})`;
+    saveAllMenuItem.disabled = false;
+  } else if (zipMode) {
+    saveAllMenuItem.textContent = '\uD83D\uDCBE Save All (ZIP)';
+    saveAllMenuItem.disabled = false;
+  } else {
+    saveAllMenuItem.textContent = '\uD83D\uDCBE Save All';
+    saveAllMenuItem.disabled = false;
+  }
+}
+
+const overflowWrap = document.createElement('div');
+overflowWrap.id = 'overflow-wrap';
+overflowWrap.append(overflowBtn);
+
+let overflowOpen = false;
+function dismissOverflowMenu() {
+  overflowMenu.classList.add('hidden');
+  overflowOpen = false;
+}
+overflowBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  overflowOpen = !overflowOpen;
+  if (overflowOpen) {
+    updateZipMenuItem();
+    updateSaveAllMenuItem();
+    // Position fixed below the button
+    const rect = overflowBtn.getBoundingClientRect();
+    overflowMenu.style.top = (rect.bottom + 6) + 'px';
+    overflowMenu.style.right = (window.innerWidth - rect.right) + 'px';
+    overflowMenu.classList.remove('hidden');
+    app.appendChild(overflowMenu);
+    requestAnimationFrame(() => {
+      const handler = (evt) => {
+        if (!overflowMenu.contains(evt.target) && evt.target !== overflowBtn) {
+          dismissOverflowMenu();
+          document.removeEventListener('click', handler, true);
+        }
+      };
+      document.addEventListener('click', handler, true);
+    });
+  } else {
+    dismissOverflowMenu();
+  }
+});
+
 viewToggle.append(listViewBtn, gridViewBtn, sortBtn);
-actionsRow.append(selectModeBtn, advancedBtn, viewToggle, retryFailedBtn, saveAllBtn);
+actionsRow.append(selectModeBtn, advancedBtn, retryFailedBtn, overflowWrap);
 
 // Collapsible advanced panel
 const advancedPanel = document.createElement('div');
 advancedPanel.id = 'advanced-panel';
 advancedPanel.className = 'hidden';
 
-// Advanced content: dimension inputs, conversion/zip, copy/export, selection helpers
+// Advanced content: dimension inputs + format conversion on one row, selection helpers below
 const advRow1 = document.createElement('div');
 advRow1.className = 'adv-row';
-advRow1.append(minWInput, minHInput);
+advRow1.append(minWInput, minHInput, convertSelect);
 
 const advRow3 = document.createElement('div');
 advRow3.className = 'adv-row';
-advRow3.append(convertSelect, zipToggle, copyUrlsBtn, exportCsvBtn, selectAllBtn, clearSelBtn);
+advRow3.append(selectAllBtn, clearSelBtn);
 
 advancedPanel.append(advRow1, advRow3);
 controls.append(searchInput, controlsRow, actionsRow);
@@ -635,11 +799,13 @@ function createMediaItem(item, index, opts = {}) {
 
   meta.append(urlLabel);
 
-  // Source pill
-  if (item.source) {
+  // Source pill — skip when label is redundant with the type badge
+  const sourceLabel = item.source ? (SOURCE_LABELS[item.source] ?? item.source) : null;
+  const isRedundant = sourceLabel && (sourceLabel === item.type || sourceLabel === 'img' || sourceLabel === 'source');
+  if (sourceLabel && !isRedundant) {
     const srcPill = document.createElement('span');
     srcPill.className = 'media-source-pill';
-    srcPill.textContent = SOURCE_LABELS[item.source] ?? item.source;
+    srcPill.textContent = sourceLabel;
     meta.append(srcPill);
   }
 
@@ -680,6 +846,17 @@ function createMediaItem(item, index, opts = {}) {
     openLink.title = 'Open in new tab';
     openLink.dataset.url = item.url;
     row.appendChild(openLink);
+  }
+
+  // Reverse image search (only for images with fetchable URLs)
+  if (item.type === 'image' && !item.url.startsWith('blob:') && !item.url.startsWith('data:') && !item.embed) {
+    const searchBtn = document.createElement('button');
+    searchBtn.type = 'button';
+    searchBtn.className = 'search-btn';
+    searchBtn.textContent = '\uD83D\uDD0D';
+    searchBtn.title = 'Reverse image search';
+    searchBtn.dataset.url = item.url;
+    row.appendChild(searchBtn);
   }
 
   return row;
@@ -804,9 +981,84 @@ function updateVirtualVisible(viewport, state) {
   visible.replaceChildren(fragment);
 }
 
+// ── Reverse Image Search ──
+
+const REVERSE_SEARCH_ENGINES = [
+  { label: 'Google Lens', url: (src) => `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(src)}` },
+  { label: 'Bing Visual', url: (src) => `https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${encodeURIComponent(src)}` },
+  { label: 'TinEye', url: (src) => `https://tineye.com/search?url=${encodeURIComponent(src)}` },
+];
+
+let activeSearchDropdown = null;
+
+function dismissSearchDropdown() {
+  if (activeSearchDropdown) {
+    activeSearchDropdown.remove();
+    activeSearchDropdown = null;
+  }
+}
+
+function showSearchDropdown(anchorBtn) {
+  dismissSearchDropdown();
+  const url = anchorBtn.dataset.url;
+  if (!url) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'search-dropdown';
+
+  for (const engine of REVERSE_SEARCH_ENGINES) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'search-dropdown-item';
+    item.textContent = engine.label;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      chrome.tabs.create({ url: engine.url(url) });
+      dismissSearchDropdown();
+    });
+    menu.appendChild(item);
+  }
+
+  // Position fixed relative to viewport so it's never clipped by overflow
+  const rect = anchorBtn.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.top = 'auto';
+  menu.style.right = 'auto';
+  // Show above the button if near the bottom, below otherwise
+  const spaceBelow = window.innerHeight - rect.bottom;
+  if (spaceBelow < 130) {
+    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    menu.style.left = Math.max(4, rect.left - 80) + 'px';
+  } else {
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.left = Math.max(4, rect.left - 80) + 'px';
+  }
+  app.appendChild(menu);
+  activeSearchDropdown = menu;
+
+  // Close on outside click (next tick to avoid immediate dismiss)
+  requestAnimationFrame(() => {
+    const handler = (evt) => {
+      if (!menu.contains(evt.target) && evt.target !== anchorBtn) {
+        dismissSearchDropdown();
+        document.removeEventListener('click', handler, true);
+      }
+    };
+    document.addEventListener('click', handler, true);
+  });
+}
+
 // ── Event Handlers ──
 
 mediaListEl.addEventListener('click', async (e) => {
+  // Reverse image search button
+  const searchBtn = e.target.closest('.search-btn');
+  if (searchBtn) {
+    e.stopPropagation();
+    showSearchDropdown(searchBtn);
+    return;
+  }
+
   const openBtn = e.target.closest('.open-tab-btn');
   if (openBtn) {
     try {
@@ -864,9 +1116,19 @@ mediaListEl.addEventListener('click', async (e) => {
 });
 
 // Live progress updates from service worker during Save All
+// + push-based media updates from content script
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'downloadProgress' && saveAllBtn.classList.contains('saving')) {
     saveAllBtn.textContent = `Saving ${message.completed}/${message.total}\u2026`;
+  }
+  // Content script pushed a media update — render immediately
+  if (message.action === 'mediaUpdated' && message.media) {
+    const deduped = deduplicateMedia(message.media);
+    if (!mediaEqual(allMedia, deduped)) {
+      allMedia = deduped;
+      renderMedia(allMedia);
+      if (activePageUrl) setCachedMedia(activePageUrl, message.media);
+    }
   }
 });
 
@@ -942,7 +1204,6 @@ saveAllBtn.addEventListener('click', async () => {
     }
 
     if (response.failed > 0) {
-      const failedSet = new Set(response.failedUrls ?? []);
       lastFailedItems = items.filter((it) => failedSet.has(it.url));
       retryFailedBtn.classList.remove('hidden');
       saveAllBtn.textContent = 'Save All';
@@ -986,6 +1247,7 @@ convertSelect.addEventListener('change', () => {
 zipToggle.addEventListener('click', () => {
   zipMode = !zipMode;
   zipToggle.classList.toggle('active', zipMode);
+  updateZipMenuItem();
   updateSelectionUi();
 });
 
@@ -1253,37 +1515,104 @@ function cancelPendingPreview() {
   }
 }
 
-mediaListEl.addEventListener('mouseenter', (e) => {
-  const item = e.target.closest('.media-item');
-  if (!item) return;
+// Preview activation zone — center 50% of thumbnail
+const PREVIEW_ZONE_RATIO = 0.5; // 50% of thumb dimensions
+let previewZoneEl = null;
+let lastHoverThumb = null;
 
-  // Dismiss preview when entering action button
-  if (e.target.closest('.save-btn') || e.target.closest('.copy-btn') || e.target.closest('.open-tab-btn')) {
+function isInCenterZone(mouseX, mouseY, thumbRect) {
+  const insetX = thumbRect.width * (1 - PREVIEW_ZONE_RATIO) / 2;
+  const insetY = thumbRect.height * (1 - PREVIEW_ZONE_RATIO) / 2;
+  return (
+    mouseX >= thumbRect.left + insetX &&
+    mouseX <= thumbRect.right - insetX &&
+    mouseY >= thumbRect.top + insetY &&
+    mouseY <= thumbRect.bottom - insetY
+  );
+}
+
+function showPreviewZone(thumb) {
+  if (lastHoverThumb === thumb && previewZoneEl) return;
+  hidePreviewZone();
+  lastHoverThumb = thumb;
+  const zone = document.createElement('div');
+  zone.className = 'preview-zone';
+  // Position zone as an overlay inside the media-item, over the thumb
+  thumb.parentElement.style.position = 'relative';
+  zone.style.left = (thumb.offsetLeft + thumb.offsetWidth * (1 - PREVIEW_ZONE_RATIO) / 2) + 'px';
+  zone.style.top = (thumb.offsetTop + thumb.offsetHeight * (1 - PREVIEW_ZONE_RATIO) / 2) + 'px';
+  zone.style.width = (thumb.offsetWidth * PREVIEW_ZONE_RATIO) + 'px';
+  zone.style.height = (thumb.offsetHeight * PREVIEW_ZONE_RATIO) + 'px';
+  thumb.parentElement.appendChild(zone);
+  previewZoneEl = zone;
+}
+
+function hidePreviewZone() {
+  if (previewZoneEl) {
+    previewZoneEl.remove();
+    previewZoneEl = null;
+  }
+  lastHoverThumb = null;
+}
+
+mediaListEl.addEventListener('mousemove', (e) => {
+  // Ignore when over action buttons
+  if (e.target.closest('.save-btn') || e.target.closest('.copy-btn') || e.target.closest('.open-tab-btn') || e.target.closest('.search-btn')) {
     cancelPendingPreview();
     hidePreview();
+    hidePreviewZone();
     return;
   }
 
-  cancelPendingPreview();
-  hoverTimer = setTimeout(() => {
-    const url = item.dataset.url;
-    if (!url) return;
-    if (!item.isConnected) return;
-    const mediaItem = getFiltered().find((m) => m.url === url);
-    if (mediaItem) showPreview(mediaItem, item);
-  }, HOVER_DELAY_MS);
+  const item = e.target.closest('.media-item');
+  if (!item) {
+    cancelPendingPreview();
+    hidePreviewZone();
+    return;
+  }
+
+  const thumb = item.querySelector('.media-thumb');
+  if (!thumb) {
+    hidePreviewZone();
+    return;
+  }
+
+  const thumbRect = thumb.getBoundingClientRect();
+  const inZone = isInCenterZone(e.clientX, e.clientY, thumbRect);
+
+  // Show the golden zone indicator whenever hovering the item
+  showPreviewZone(thumb);
+  previewZoneEl?.classList.toggle('active', inZone);
+
+  if (inZone) {
+    // Start preview timer if not already pending
+    if (!hoverTimer && !activePreviewItem) {
+      hoverTimer = setTimeout(() => {
+        hoverTimer = null;
+        const url = item.dataset.url;
+        if (!url || !item.isConnected) return;
+        const mediaItem = getFiltered().find((m) => m.url === url);
+        if (mediaItem) showPreview(mediaItem, item);
+      }, HOVER_DELAY_MS);
+    }
+  } else {
+    // Moved out of center zone — cancel pending preview but keep existing one
+    if (hoverTimer) {
+      cancelPendingPreview();
+    }
+  }
 }, true);
 
 mediaListEl.addEventListener('mouseleave', (e) => {
   const item = e.target.closest('.media-item');
   if (!item) return;
 
-  // Only dismiss when truly leaving the row (relatedTarget is outside this item)
   const goingTo = e.relatedTarget;
-  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn') && !goingTo.closest('.copy-btn') && !goingTo.closest('.open-tab-btn')) return;
+  if (goingTo && item.contains(goingTo) && !goingTo.closest('.save-btn') && !goingTo.closest('.copy-btn') && !goingTo.closest('.open-tab-btn') && !goingTo.closest('.search-btn')) return;
 
   cancelPendingPreview();
   hidePreview();
+  hidePreviewZone();
 }, true);
 
 // ── IndexedDB Cache ──
@@ -1495,10 +1824,11 @@ async function init() {
       summary.textContent = 'Could not scan this page';
     }
 
-    // Adaptive polling: 1.5s for first 30s (catch quick lazy-load), then 2.5s
-    const POLL_FAST_MS = 1500;
-    const POLL_SLOW_MS = 2500;
-    const POLL_FAST_DURATION_MS = 30 * 1000;
+    // Adaptive polling: now a safety net since content script pushes updates.
+    // Faster initial burst (catch injection timing), then relaxed fallback.
+    const POLL_FAST_MS = 1000;
+    const POLL_SLOW_MS = 4000;
+    const POLL_FAST_DURATION_MS = 15 * 1000;
     const pollStart = Date.now();
     let pollTimeoutId = null;
 

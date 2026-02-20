@@ -147,55 +147,121 @@ if (!globalThis.__mediaLinkSaverInjected) {
   }
 
   // ── Scan scheduling (shared by MutationObservers and scroll handler) ──
+  //
+  // Tiered debounce: attribute changes (lazy-load swaps) get a short delay;
+  // childList / structural changes get a longer delay to coalesce bulk DOM
+  // updates common in SPAs.  After a rescan, if the media list changed we
+  // push a notification to the popup so it can update immediately instead of
+  // waiting for the next poll cycle.
 
-  let scanQueued = false;
-  const IDLE_TIMEOUT_MS = 800;
-  const scheduleIdle = globalThis.requestIdleCallback
-    ? (cb) => requestIdleCallback(cb, { timeout: IDLE_TIMEOUT_MS })
-    : (cb) => setTimeout(cb, 120);
+  const DEBOUNCE_ATTR_MS = 120;      // fast — lazy src swaps, poster loads
+  const DEBOUNCE_STRUCTURAL_MS = 350; // slower — bulk DOM inserts/removes
+  const DEBOUNCE_SCROLL_MS = 150;     // scroll-triggered lazy-load check
+  const MAX_SCAN_INTERVAL_MS = 80;    // minimum gap between consecutive scans
 
-  function queueRescan() {
-    if (scanQueued) return;
-    scanQueued = true;
-    scheduleIdle(() => {
-      scanQueued = false;
-      globalThis.__mediaLinkSaverMedia = extractMediaLinks();
-    });
+  let scanTimer = null;
+  let lastScanTime = 0;
+  let mediaGeneration = 0;  // bumped on every change — lets popup skip no-op polls
+
+  function runScan() {
+    scanTimer = null;
+    const now = performance.now();
+    // Enforce minimum gap so rapid-fire triggers don't starve the main thread
+    if (now - lastScanTime < MAX_SCAN_INTERVAL_MS) {
+      scanTimer = setTimeout(runScan, MAX_SCAN_INTERVAL_MS);
+      return;
+    }
+    lastScanTime = now;
+    const prev = globalThis.__mediaLinkSaverMedia;
+    const next = extractMediaLinks();
+    globalThis.__mediaLinkSaverMedia = next;
+
+    // Detect whether results actually changed
+    const changed = !prev || prev.length !== next.length ||
+      prev.some((item, i) => item.url !== next[i].url || item.type !== next[i].type);
+    if (changed) {
+      mediaGeneration++;
+      // Push update to popup / side panel so it doesn't have to wait for poll
+      try {
+        chrome.runtime.sendMessage({
+          action: 'mediaUpdated',
+          media: next,
+          generation: mediaGeneration,
+        }).catch(() => { /* popup may be closed — ignore */ });
+      } catch { /* extension context invalidated */ }
+    }
   }
 
-  // Only queue a full rescan when mutations touch nodes that could affect media
+  function queueRescan(delayMs = DEBOUNCE_STRUCTURAL_MS) {
+    // If a scan is already scheduled with a shorter/equal delay, keep it
+    if (scanTimer !== null) return;
+    scanTimer = setTimeout(runScan, delayMs);
+  }
+
+  function queueFastRescan() {
+    // Cancel any pending slow scan and replace with a fast one
+    if (scanTimer !== null) clearTimeout(scanTimer);
+    scanTimer = setTimeout(runScan, DEBOUNCE_ATTR_MS);
+  }
+
+  // ── Mutation relevance checks (hot path — keep cheap) ──
+
   const MEDIA_TAG_NAMES = new Set([
     'IMG', 'VIDEO', 'AUDIO', 'SOURCE', 'PICTURE', 'A', 'IFRAME', 'CANVAS',
     'LINK', 'META', 'NOSCRIPT', 'SCRIPT', 'STYLE',
   ]);
-  const MEDIA_QUICK_SELECTOR = 'img, video, audio, source, picture, a[href], iframe, canvas, [data-src], [data-lazy], [data-original], [data-hi-res-src], [data-srcset], [data-thumbnail], [data-poster], link[rel=preload], meta[property^="og:"], meta[name^="twitter:"], [itemprop]';
 
+  // Quick structural check — avoids querySelector per node
   function nodeCouldAffectMedia(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
-    const el = node;
-    if (MEDIA_TAG_NAMES.has(el.tagName)) return true;
-    if (LAZY_ATTRS.some((attr) => el.hasAttribute(attr))) return true;
-    if (el.hasAttribute('style') && /background/.test(el.getAttribute('style') || '')) return true;
-    try {
-      return el.querySelector(MEDIA_QUICK_SELECTOR) !== null;
-    } catch {
-      return false;
+    const tag = node.tagName;
+    if (MEDIA_TAG_NAMES.has(tag)) return true;
+    // Check lazy-load attrs directly (cheaper than .some + hasAttribute on each)
+    const attrs = node.attributes;
+    if (attrs) {
+      for (let i = 0; i < attrs.length; i++) {
+        const name = attrs[i].name;
+        if (name === 'data-src' || name === 'data-lazy' || name === 'data-original' ||
+            name === 'data-lazy-src' || name === 'data-hi-res-src' ||
+            name === 'data-thumbnail' || name === 'data-poster') return true;
+      }
     }
-  }
-
-  function mutationsTouchMedia(mutations) {
-    for (const mutation of mutations) {
-      if (mutation.type === 'attributes') return true;
-      if (mutation.type === 'childList') {
-        for (const node of mutation.addedNodes) {
-          if (nodeCouldAffectMedia(node)) return true;
-        }
-        for (const node of mutation.removedNodes) {
-          if (nodeCouldAffectMedia(node)) return true;
-        }
+    if (node.hasAttribute?.('style') && node.style?.backgroundImage) return true;
+    // For container nodes, do a tag-only check (much cheaper than querySelector)
+    if (node.getElementsByTagName) {
+      for (const t of ['IMG', 'VIDEO', 'AUDIO', 'IFRAME', 'CANVAS']) {
+        if (node.getElementsByTagName(t).length > 0) return true;
       }
     }
     return false;
+  }
+
+  function processMutations(mutations) {
+    let dominated = false; // true if any mutation is a relevant attribute change
+    let structural = false;
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes') {
+        // attributeFilter already limits to OBSERVED_ATTRS so this is always relevant
+        dominated = true;
+        continue;
+      }
+      if (mutation.type === 'childList') {
+        const nodes = mutation.addedNodes;
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodeCouldAffectMedia(nodes[i])) { structural = true; break; }
+        }
+        if (!structural) {
+          const removed = mutation.removedNodes;
+          for (let i = 0; i < removed.length; i++) {
+            if (nodeCouldAffectMedia(removed[i])) { structural = true; break; }
+          }
+        }
+        if (structural) break; // no need to keep checking
+      }
+    }
+    // Attribute changes (lazy-load swaps) get the fast path
+    if (dominated) queueFastRescan();
+    else if (structural) queueRescan(DEBOUNCE_STRUCTURAL_MS);
   }
 
   // ── Shadow DOM traversal (cached) ──
@@ -211,7 +277,11 @@ if (!globalThis.__mediaLinkSaverInjected) {
   let rootsInitialized = false;
   const canOpenClosed = typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot;
   const getShadowRoot = canOpenClosed
-    ? (el) => el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null
+    ? (el) => {
+        try {
+          return el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null;
+        } catch { return el.shadowRoot ?? null; }
+      }
     : (el) => el.shadowRoot;
 
   const OBSERVED_ATTRS = [
@@ -224,7 +294,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     try {
       new MutationObserver((mutations) => {
         checkMutationsForShadowRoots(mutations);
-        if (mutationsTouchMedia(mutations)) queueRescan();
+        processMutations(mutations);
       }).observe(shadowRoot, {
         childList: true,
         subtree: true,
@@ -648,7 +718,24 @@ if (!globalThis.__mediaLinkSaverInjected) {
 
   const bodyObserver = new MutationObserver((mutations) => {
     checkMutationsForShadowRoots(mutations);
-    if (mutationsTouchMedia(mutations)) queueRescan();
+    processMutations(mutations);
+    // Re-observe any new lazy-load placeholders added by structural mutations
+    if (lazyObserver) {
+      for (const mutation of mutations) {
+        if (mutation.type !== 'childList') continue;
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.matches?.('img[data-src], img[data-lazy], img[loading="lazy"]')) {
+            lazyObserver.observe(node);
+          }
+          if (node.querySelectorAll) {
+            for (const img of node.querySelectorAll('img[data-src], img[data-lazy], img[loading="lazy"]')) {
+              lazyObserver.observe(img);
+            }
+          }
+        }
+      }
+    }
   });
 
   if (document.body) {
@@ -659,7 +746,7 @@ if (!globalThis.__mediaLinkSaverInjected) {
     });
   }
 
-  // ── Scroll-triggered re-scan (catches lazy-load via IntersectionObserver) ──
+  // ── Scroll-triggered re-scan ──
 
   let scrollQueued = false;
   window.addEventListener('scroll', () => {
@@ -667,13 +754,44 @@ if (!globalThis.__mediaLinkSaverInjected) {
     scrollQueued = true;
     setTimeout(() => {
       scrollQueued = false;
-      queueRescan();
-    }, 300);
+      queueRescan(0);
+    }, DEBOUNCE_SCROLL_MS);
   }, { passive: true });
+
+  // ── IntersectionObserver — catches lazy-loads more precisely than scroll ──
+  //
+  // Watches placeholder images (tiny/no natural size) and triggers a rescan
+  // when they enter the viewport and likely swap src via IntersectionObserver
+  // or a lazy-load library.
+
+  let lazyObserver = null;
+  try {
+    lazyObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          // Element became visible — a lazy-load library may swap src soon
+          queueRescan(DEBOUNCE_ATTR_MS);
+          // Stop watching this element (it only lazy-loads once)
+          lazyObserver.unobserve(entry.target);
+        }
+      }
+    }, { rootMargin: '200px' }); // 200px lookahead
+
+    // Observe images that look like lazy-load placeholders
+    function observeLazyPlaceholders() {
+      for (const img of document.querySelectorAll('img[data-src], img[data-lazy], img[loading="lazy"]')) {
+        lazyObserver.observe(img);
+      }
+    }
+    observeLazyPlaceholders();
+  } catch { /* IntersectionObserver unavailable */ }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'getMedia') {
-      sendResponse({ media: globalThis.__mediaLinkSaverMedia });
+      sendResponse({
+        media: globalThis.__mediaLinkSaverMedia,
+        generation: mediaGeneration,
+      });
     }
     return true;
   });

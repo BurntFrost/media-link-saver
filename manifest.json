@@ -3,7 +3,7 @@
   "name": "Media Link Saver",
   "version": "1.2.0",
   "description": "Finds photos and videos on any page and lets you save them with one click.",
-  "permissions": ["activeTab", "scripting", "downloads", "storage", "contextMenus"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage", "contextMenus", "sidePanel"],
 "options_ui": { "page": "options/options.html" },
   "action": {
   "default_popup": "popup/popup.html",
@@ -15,6 +15,9 @@
   },
   "background": {
     "service_worker": "background/service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"

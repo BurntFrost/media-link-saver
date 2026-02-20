@@ -1,0 +1,13 @@
+/* Side Panel overrides — wider viewport, no fixed height constraint */
+
+body.sidepanel {
+  width: 100%;
+  max-height: none;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* Let virtual list viewport use full available height */
+body.sidepanel .virtual-list-viewport {
+  max-height: calc(100vh - 180px);
+}
